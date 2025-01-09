@@ -3,6 +3,8 @@ from flwr.client.typing import ClientAppCallable
 from typing import Callable
 import wandb
 import time
+from .myfedavg import client_id_idx
+
 
 # Define type alias for Mod
 Mod = Callable[[Message, Context, ClientAppCallable], Message]
@@ -13,20 +15,18 @@ def get_wandb_mod(name: str) -> Mod:
     
     def wandb_mod(msg: Message, context: Context, app: ClientAppCallable) -> Message:
         nonlocal active_run
-        
         server_round = int(msg.metadata.group_id)
         run_id = msg.metadata.run_id
         group_name = f"Run ID: {run_id}"
         node_id = str(msg.metadata.dst_node_id)
-        run_name = f"Node ID: {node_id}"
+        run_name = f"Client ID: {client_id_idx[node_id]}"
         
-        # print("HAAAAAAAAAAAAAA")
         wandb.init(
                 project=name,
                 group=group_name,
                 name=run_name,
-                id=f"{run_id}_{node_id}",
-                # resume="allow",
+                id=f"{run_id}_{client_id_idx[node_id]}",
+                resume="allow",
                 reinit=True,
                 settings=wandb.Settings(start_method="thread")
         )
@@ -41,7 +41,6 @@ def get_wandb_mod(name: str) -> Mod:
             results_to_log = dict(metrics.get("fitres.metrics", ConfigsRecord()))
             results_to_log["fit_time"] = time_diff
             
-
             wandb.log(results_to_log, step=int(server_round), commit=True)
 
         return reply

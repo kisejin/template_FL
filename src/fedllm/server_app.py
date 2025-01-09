@@ -7,12 +7,12 @@ from datetime import datetime
 from flwr.common import Context, ndarrays_to_parameters
 from flwr.common.config import unflatten_dict
 from flwr.server import ServerApp, ServerAppComponents, ServerConfig
-from flwr.server.strategy import FedAvg
+# from flwr.server.strategy import FedAvg
 from omegaconf import DictConfig
 
 from .models import get_model, get_parameters, set_parameters
 from .dataset import replace_keys
-
+from .myfedavg import FedAvg
 
 
 load_dotenv(".env")

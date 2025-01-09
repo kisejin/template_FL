@@ -37,7 +37,7 @@ from flwr.common.logger import log
 from flwr.server.client_manager import ClientManager
 from flwr.server.client_proxy import ClientProxy
 
-from .aggregate import aggregate, aggregate_inplace, weighted_loss_avg
+from .myaggregation import aggregate, aggregate_inplace, weighted_loss_avg
 from flwr.server.strategy import Strategy
 
 WARNING_MIN_AVAILABLE_CLIENTS_TOO_LOW = """
@@ -47,6 +47,7 @@ connected to the server. `min_available_clients` must be set to a value larger
 than or equal to the values of `min_fit_clients` and `min_evaluate_clients`.
 """
 
+client_id_idx = {}
 
 # pylint: disable=line-too-long
 class FedAvg(Strategy):
@@ -179,6 +180,11 @@ class FedAvg(Strategy):
             # Custom fit config function provided
             config = self.on_fit_config_fn(server_round)
         fit_ins = FitIns(parameters, config)
+        
+        if not client_id_idx:
+            for i, (client_id, _) in enumerate(client_manager.clients.items()):
+                client_id_idx[client_id] = i
+        
 
         # Sample clients
         sample_size, min_num_clients = self.num_fit_clients(

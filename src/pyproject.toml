@@ -33,7 +33,7 @@ serverapp = "fedllm.server_app:app"
 clientapp = "fedllm.client_app:app"
 
 [tool.flwr.app.config]
-num-server-rounds = 2
+num-server-rounds = 1
 num-supernodes = 10
 
 # Define dataset
@@ -65,20 +65,20 @@ train.training-arguments.output-dir = ""
 train.training-arguments.learning-rate = 3e-4
 train.training-arguments.per-device-train-batch-size = 4
 train.training-arguments.gradient-accumulation-steps = 1
-#train.training-arguments.per-device-eval-batch-size = 2
-#train.training-arguments.eval-accumulation-steps = 1
+train.training-arguments.per-device-eval-batch-size = 2
+train.training-arguments.eval-accumulation-steps = 1
 train.training-arguments.logging-steps = 10
 train.training-arguments.num-train-epochs = 1
 train.training-arguments.max-steps = 10
 train.training-arguments.save-steps = 1000
 train.training-arguments.save-total-limit = 10
 train.training-arguments.gradient-checkpointing = true
-train.training-arguments.lr-scheduler-type = "constant"
+train.training-arguments.lr-scheduler-type = "cosine"
 train.training-arguments.warmup-steps = 0
 train.training-arguments.do-train = true
-#train.training-arguments.do-eval = true
+train.training-arguments.do-eval = true
 train.training-arguments.dataloader-drop-last = false
-#train.training-arguments.eval-strategy = "epoch"
+train.training-arguments.eval-strategy = "epoch"
 train.training-arguments.save-strategy = "no"
 train.training-arguments.ddp-find-unused-parameters = false
 train.training-arguments.group-by-length = true

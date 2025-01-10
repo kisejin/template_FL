@@ -24,6 +24,8 @@ os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN")
 
 # Get function that will be executed by the strategy's evaluate() method
 # Here we use it to save global model checkpoints
+
+
 def get_evaluate_fn(model_cfg, save_every_round, total_round, save_path):
     """Return an evaluation function for saving global model."""
 

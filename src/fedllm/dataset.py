@@ -6,6 +6,7 @@ from datasets import Dataset, DatasetDict
 from sklearn.model_selection import train_test_split
 
 FDS = None  # Cache FederatedDataset
+client_id_ds = None
 
 def split_train_test(dataset, test_size):
     # Split the dataset into train and test sets
@@ -18,7 +19,7 @@ def split_train_test(dataset, test_size):
     # Combine into a DatasetDict
     datasets_dict = DatasetDict({
         'train': train_dataset,
-        'test': test_dataset.select(range(10))
+        'test': test_dataset
     })
     return datasets_dict
 
@@ -63,7 +64,7 @@ def load_data(partition_id: int, num_partitions: int, dataset_name: str):
     print(client_trainset)
     return client_trainset
 
-def load_data1(partition_id: int, num_partitions: int, dataset_name: str):
+def load_data_homo(partition_id: int, num_partitions: int, dataset_name: str):
     """Load partition data."""
     # Only initialize `FederatedDataset` once
     global FDS
@@ -77,6 +78,17 @@ def load_data1(partition_id: int, num_partitions: int, dataset_name: str):
     client_trainset = FDS.load_partition(partition_id, "train")
     # client_trainset = client_trainset.rename_column("output", "response")
     client_set = split_train_test(client_trainset, test_size=0.2)
+    return client_set
+
+
+def load_data_hete(partition_id: int):
+    """Load partition data heterogeneous"""
+    global client_id_ds
+    if client_id_ds is None:
+        from .data_domains import client_id_dataset
+        client_id_ds = client_id_dataset
+    print(f"<---- Load client {partition_id} --->")
+    client_set = client_id_ds[str(partition_id)]
     return client_set
 
 

@@ -18,7 +18,8 @@ from trl import SFTTrainer, SFTConfig
 from .dataset import (
     get_data_collator_and_propt_formatting,
     load_data,
-    load_data1,
+    load_data_homo,
+    load_data_hete,
     replace_keys,
 )
 from .models import (
@@ -158,7 +159,7 @@ class FlowerClient(NumPyClient):
         trainer = Trainer(
             model=self.model,
             train_dataset=self.trainset,
-            eval_dataset=self.valset,
+            eval_dataset=self.valset.select(range(10)),
             args=self.training_argumnets,
             data_collator=self.data_collator,
             compute_metrics=self.compute_metrics,
@@ -182,7 +183,10 @@ def client_fn(context: Context) -> FlowerClient:
     cfg = DictConfig(replace_keys(unflatten_dict(context.run_config)))
 
     # Let's get the client partition
-    client_set = load_data1(partition_id, num_partitions, cfg.dataset.name)
+    if cfg.dataset.type == 'homo':
+        client_set = load_data_homo(partition_id, num_partitions, cfg.dataset.name)
+    else:
+        client_set = load_data_hete(partition_id)
 
     return FlowerClient(
         cfg.model,

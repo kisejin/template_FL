@@ -37,6 +37,7 @@ num-server-rounds = 1
 num-supernodes = 10
 
 # Define dataset
+dataset.type = 'hete' # type = ['homo','hete']
 dataset.name = "vicgalle/alpaca-gpt4"
 
 # Define model settings
@@ -85,7 +86,7 @@ train.training-arguments.group-by-length = true
 train.training-arguments.report-to = "wandb"
 
 # Define local training settings 
-train.strategy.fraction-fit = 0.1 
+train.strategy.fraction-fit = 0.2 
 train.strategy.fraction-evaluate = 0.1
 
 [tool.flwr.federations]

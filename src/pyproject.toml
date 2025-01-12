@@ -80,9 +80,10 @@ train.training-arguments.do-train = true
 train.training-arguments.do-eval = true
 train.training-arguments.dataloader-drop-last = false
 train.training-arguments.eval-strategy = "epoch"
-train.training-arguments.save-strategy = "no"
+train.training-arguments.save-strategy = "epoch"
 train.training-arguments.ddp-find-unused-parameters = false
 train.training-arguments.group-by-length = true
+train.training-arguments.load_best_model_at_end = true
 train.training-arguments.report-to = "wandb"
 
 # Define local training settings 

@@ -5,6 +5,7 @@ import warnings
 from typing import Dict, Tuple
 
 import torch
+import wandb
 import numpy as np
 from flwr.client import ClientApp, NumPyClient
 from flwr.common import Context
@@ -12,8 +13,10 @@ from flwr.common.config import unflatten_dict
 from flwr.common.typing import NDArrays, Scalar
 from omegaconf import DictConfig
 
-from transformers import TrainingArguments, DataCollatorForSeq2Seq, Trainer
+from transformers import TrainingArguments, DataCollatorForSeq2Seq, Trainer, EarlyStoppingCallback
 from trl import SFTTrainer, SFTConfig
+from deepspeed.profiling.flops_profiler import get_model_profile
+from deepspeed.accelerator import get_accelerator
 
 from .dataset import (
     get_data_collator_and_propt_formatting,
@@ -40,6 +43,36 @@ os.environ["RAY_DISABLE_DOCKER_CPU_WARNING"] = "1"
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
+def input_constructor(batch_size, seq_len, tokenizer):
+    fake_seq = ""
+    for _ in range(seq_len - 2):  # ignore the two special tokens [CLS] and [SEP]
+      fake_seq += tokenizer.pad_token
+    inputs = tokenizer([fake_seq] * batch_size,
+                       padding=True,
+                       truncation=True,
+                       # max_length=seq_len,
+                       return_tensors="pt")
+    labels = torch.tensor([1] * batch_size)
+    inputs = dict(inputs)
+    # inputs.update({"labels": torch.unsqueeze(labels,dim=0)})
+    
+    # To device
+    inputs = {k: v.to('cuda:0') for k, v in inputs.items()}
+    return inputs
+
+def convert_to_float(value_str):
+    value, unit = value_str.split()
+    value = float(value)
+    if unit == 'T' or 'T' in unit:
+        return value * 1e12
+    elif unit == 'G' or 'G' in unit:
+        return value * 1e9
+    elif unit == 'M' or 'M' in unit:
+        return value * 1e6
+    elif unit == 'K' or 'K' in unit:
+        return value * 1e3
+    return value
+
 # pylint: disable=too-many-arguments
 # pylint: disable=too-many-instance-attributes
 class FlowerClient(NumPyClient):
@@ -56,8 +89,8 @@ class FlowerClient(NumPyClient):
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.train_cfg = train_cfg
         
-        self.training_argumnets = TrainingArguments(**train_cfg.training_arguments)
-        # self.training_argumnets = SFTConfig(**train_cfg.training_arguments, max_seq_length=train_cfg.seq_length) 
+        self.training_arguments = TrainingArguments(**train_cfg.training_arguments)
+        # self.training_arguments = SFTConfig(**train_cfg.training_arguments, max_seq_length=train_cfg.seq_length) 
         
         self.num_rounds = num_rounds
         self.trainset = trainset
@@ -96,7 +129,6 @@ class FlowerClient(NumPyClient):
         )
         return {
             **get_rouge_score(predictions=pred_str, targets=label_str),
-            # **exact_match(predictions=pred_str, targets=label_str),
             **f1(predictions=pred_str, targets=label_str),
         }
     
@@ -140,19 +172,23 @@ class FlowerClient(NumPyClient):
             self.train_cfg.learning_rate_min,
         )
 
-        self.training_argumnets.learning_rate = new_lr
-        self.training_argumnets.output_dir = config["save_path"]
+        self.training_arguments.learning_rate = new_lr
+        self.training_arguments.output_dir = config["save_path"]
+        
+        # Initialize callback
+        early_stopping_callback = EarlyStoppingCallback(early_stopping_patience=5)
 
         # Construct supervised trainer
         # trainer = SFTTrainer(
         #     model=self.model,
         #     tokenizer=self.tokenizer,
-        #     args=self.training_argumnets,
+        #     args=self.training_arguments,
         #     train_dataset=self.trainset,
         #     eval_dataset=self.valset,
         #     formatting_func=self.formatting_prompts_func,
         #     data_collator=self.data_collator,
         #     compute_metrics=self.compute_metrics,
+        #     callbacks=[flops_callback, early_stopping_callback]
         # )
         
         # Constuct baseline Trainer
@@ -160,18 +196,34 @@ class FlowerClient(NumPyClient):
             model=self.model,
             train_dataset=self.trainset,
             eval_dataset=self.valset.select(range(10)),
-            args=self.training_argumnets,
+            args=self.training_arguments,
             data_collator=self.data_collator,
             compute_metrics=self.compute_metrics,
+            callbacks=[early_stopping_callback]
         )
 
         # Do local training
         results = trainer.train()
+        
+        # Calculate FLOPs
+        with get_accelerator().device('cuda:0'):
+            batch_size = self.training_arguments.per_device_eval_batch_size
+            seq_len = self.train_cfg.seq_length
+            flops, macs, params = get_model_profile(
+              self.model,
+              kwargs=input_constructor(batch_size, seq_len, self.tokenizer),
+              print_profile=True,
+              detailed=False,
+            )
+            flops_value = convert_to_float(flops)
+            macs_value = convert_to_float(macs)
+            params_value = convert_to_float(params)
+            wandb.log({"total_flops": flops_value, "macs": macs_value, "params": params_value})  # wa
 
         return (
             get_parameters(self.model),
             len(self.trainset),
-            {"train_loss": results.training_loss},
+            {"train_loss": results.training_loss, "flops": flops_value},
         )
 
 

@@ -219,7 +219,8 @@ class FlowerClient(NumPyClient):
             macs_value = convert_to_float(macs)
             params_value = convert_to_float(params)
             wandb.log({"total_flops": flops_value, "macs": macs_value, "params": params_value})  # wa
-
+    
+        
         return (
             get_parameters(self.model),
             len(self.trainset),

@@ -28,7 +28,7 @@ def get_wandb_mod(name: str) -> Mod:
                 id=f"{run_id}_{client_id_idx[node_id]}",
                 resume="allow",
                 reinit=True,
-                settings=wandb.Settings(start_method="thread")
+                # settings=wandb.Settings(start_method="thread")
         )
 
         start_time = time.time()

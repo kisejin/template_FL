@@ -6,8 +6,10 @@ import wandb
 import numpy as np
 from dotenv import load_dotenv
 from datetime import datetime
+from tqdm import tqdm
 
-from transformers import DataCollatorForSeq2Seq, DataCollatorWithPadding, TrainingArguments, Trainer
+from transformers import DataCollatorForSeq2Seq, DataCollatorWithPadding, TrainingArguments, Trainer, GenerationConfig
+from transformers.integrations import WandbCallback
 from torch.utils.data import DataLoader
 from flwr.common import Context, ndarrays_to_parameters
 from flwr.common.config import unflatten_dict
@@ -27,19 +29,68 @@ load_dotenv(".env")
 os.environ["WANDB_API_KEY"] = os.getenv("WANDB_API_KEY")
 os.environ["WANDB_NAME"] = os.getenv("WANDB_NAME")
 os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN")
+# os.environ["WANDB_LOG_MODEL"] = "checkpoint"
+
+
+
+class LLMSampleCB(WandbCallback):
+    def __init__(self, trainer, test_dataset, task, num_samples=10, max_new_tokens=256, log_model="checkpoint"):
+        "A CallBack to log samples a wandb.Table during training"
+        super().__init__()
+        # self._log_model = log_model
+        self.task = task
+        self.sample_dataset = test_dataset.shuffle().select(range(num_samples))
+        self.model, self.tokenizer = trainer.model, trainer.tokenizer
+        self.max_new_tokens = max_new_tokens
+        self.gen_config = GenerationConfig.from_pretrained(trainer.model.name_or_path,
+                                                           max_new_tokens=max_new_tokens)
+    def generate(self, prompt):
+        tokenized_prompt = self.tokenizer(
+            prompt, 
+            # padding='max_length', max_length=self.max_new_tokens, 
+            return_tensors='pt'
+        )
+        input_ids = tokenized_prompt['input_ids'].to('cuda:0')
+        
+        with torch.inference_mode():
+            output = self.model.generate(input_ids, generation_config=self.gen_config)
+        return self.tokenizer.decode(output[0][len(tokenized_prompt[0]):], skip_special_tokens=True)
+    
+    def samples_table(self, examples):
+        "Create a wandb.Table to store the generations"
+        records_table = wandb.Table(columns=["input", "prediction", "label", "task"] + list(self.gen_config.to_dict().keys()))
+        for example in tqdm(examples, leave=False):
+            instruction = example["instruction"]
+            inputt = example["input"]
+            output = example['output']
+            prompt = ''
+            if inputt == '':
+                prompt = f"""Below is an instruction that describes a task. Write a response that appropriately completes the request. ### Instruction: {instruction} ### Response: """
+            else:
+                prompt = f"""Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request. ### Instruction: {instruction} ### Input: {inputt} ### Response:""" 
+        
+            generation = self.generate(prompt=prompt)
+            records_table.add_data(prompt, generation, output, self.task, *list(self.gen_config.to_dict().values()))
+        return records_table
+        
+    def on_evaluate(self, args, state, control,  **kwargs):
+        "Log the wandb.Table after calling trainer.evaluate"
+        super().on_evaluate(args, state, control, **kwargs)
+        records_table = self.samples_table(self.sample_dataset)
+        self._wandb.log({"sample_predictions":records_table})
 
 
 
 def test_model(dataset, model, tokenizer, train_cfg, tmp_dict, sround, task):
     
-    wandb.init(
-            project='FL@CSS25',
-            name=f'global_eval_round_{sround}',
-            id=f"round_{sround}",
-            resume="allow",
-            reinit=True,
-            settings=wandb.Settings(start_method="thread")
-    )
+    # wandb.init(
+    #         project='FL@CSS25',
+    #         name=f'global_eval_round_{sround}',
+    #         id=f"round_{sround}",
+    #         resume="allow",
+    #         reinit=True,
+    #         # settings=wandb.Settings(start_method="thread")
+    # )
     
     def compute_metrics(pred):
         labels_ids = pred.label_ids
@@ -88,7 +139,11 @@ def test_model(dataset, model, tokenizer, train_cfg, tmp_dict, sround, task):
         args=training_arguments,
         data_collator=data_collator,
         compute_metrics=compute_metrics,
+        tokenizer=tokenizer
     )
+    
+      
+    trainer.add_callback(LLMSampleCB(trainer, testset, task, num_samples=5, max_new_tokens=256, log_model="checkpoint"))
 
     # Do local training
     results = trainer.evaluate()
@@ -104,7 +159,8 @@ def test_model(dataset, model, tokenizer, train_cfg, tmp_dict, sround, task):
         f'{task}_rougeLsum': results['eval_rougeLsum'],
     }
 
-
+    wandb.finish()
+    
     return eval_loss, eval_metrics
     
     

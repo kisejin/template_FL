@@ -128,7 +128,7 @@ def test_model(dataset, model, tokenizer, train_cfg, tmp_dict, sround, task):
     training_arguments = TrainingArguments(**train_cfg.training_arguments)
     training_arguments.output_dir = './global_results'
     training_arguments.logging_dir='./global_logs'
-    # training_arguments.run_name = f'global_eval_round_{sround}'
+    training_arguments.run_name = f'global_eval_round_{sround}_{task}'
     
     
     

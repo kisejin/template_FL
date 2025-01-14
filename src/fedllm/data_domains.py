@@ -41,7 +41,7 @@ class DatasetAbstract:
                     subset, test_size=0.2, shuffle=True, random_state=42
                 )
                 test, global_test = train_test_split(
-                    subset, test_size=0.1, shuffle=True, random_state=42
+                    test, test_size=0.1, shuffle=True, random_state=42
                 )
                 ds = DatasetDict({
                     "train": Dataset.from_pandas(train).remove_columns(['__index_level_0__']),
@@ -56,10 +56,10 @@ class DatasetAbstract:
                 
         else:
             train, test = train_test_split(
-                dataset , test_size=0.2, shuffle=True, random_state=42
+                dataset , test_size=0.001, shuffle=True, random_state=42
             )
             test, global_test = train_test_split(
-                    subset, test_size=0.1, shuffle=True, random_state=42
+                    subset, test_size=0.2, shuffle=True, random_state=42
             )
             ds = DatasetDict(
                 {
@@ -127,7 +127,7 @@ class MathDataset(DatasetAbstract):
     def get_split_dataset(self, dataset):
         dataset_train, dataset_test = dataset[0], dataset[1]
         dataset_test, global_test = train_test_split(
-            dataset_test, test_size=0.1, shuffle=True, random_state=42
+            dataset_test, test_size=0.2, shuffle=True, random_state=42
         )
         global_test = Dataset.from_pandas(global_test)
         print(f">> ===== After processing, Dataset  has {len(dataset_train)} examples. =====")
@@ -240,14 +240,7 @@ class CodeDataset(DatasetAbstract):
             {self.metadata['domain']: global_test}
         )
 
-def release_ds():
-    data_domain = {
-        'general': GeneralDataset().list_dataset,
-        'finance': FinanceDataset().list_dataset,
-        'math': MathDataset().list_dataset,
-        'medical': MedicalDataset().list_dataset,
-        'code': CodeDataset().list_dataset
-    }
+def release_ds(data_domain):
     tmp_dataset = {}
     k = 0
     for task in data_domain.keys():
@@ -257,13 +250,13 @@ def release_ds():
     
     return tmp_dataset
         
-# data_domain = {
-#     'general': GeneralDataset().list_dataset,
-#     'finance': FinanceDataset().list_dataset,
-#     'math': MathDataset().list_dataset,
-#     'medical': MedicalDataset().list_dataset,
-#     'code': CodeDataset().list_dataset
-# }
+data_domain = {
+    'general': GeneralDataset().list_dataset,
+    'finance': FinanceDataset().list_dataset,
+    'math': MathDataset().list_dataset,
+    'medical': MedicalDataset().list_dataset,
+    'code': CodeDataset().list_dataset
+}
         
 # client_id_dataset = {
 #     '0': data_domain['general'][0],
@@ -278,4 +271,4 @@ def release_ds():
 #     '9': data_domain['code'][1],
 # }
 
-client_id_dataset = release_ds()
+client_id_dataset = release_ds(data_domain)

@@ -13,7 +13,8 @@ from flwr.common.config import unflatten_dict
 from flwr.common.typing import NDArrays, Scalar
 from omegaconf import DictConfig
 
-from transformers import TrainingArguments, DataCollatorForSeq2Seq, Trainer, EarlyStoppingCallback
+from transformers import TrainingArguments, DataCollatorForSeq2Seq, Trainer, EarlyStoppingCallback, BertForSequenceClassification, GenerationConfig
+
 from trl import SFTTrainer, SFTConfig
 from deepspeed.profiling.flops_profiler import get_model_profile
 from deepspeed.accelerator import get_accelerator
@@ -30,6 +31,7 @@ from .dataset import (
 from .models import (
     cosine_annealing,
     get_model,
+    get_data_influence_model,
     set_parameters,
     get_parameters,
 )
@@ -105,10 +107,13 @@ class FlowerClient(NumPyClient):
         self.reference_ratio = reference_ratio
         self.holdoutset = None
         self.refset = None
+        self.data_influence_model = None
 
         # instantiate model
         self.model, self.tokenizer = get_model(model_cfg)
         
+        if self.use_mates:
+            self.data_influence_model = get_data_influence_model(model_cfg)      
         
         # (
         #     self.data_collator, 
@@ -258,7 +263,8 @@ class FlowerClient(NumPyClient):
             args=self.training_arguments,
             data_collator=self.data_collator,
             compute_metrics=self.compute_metrics, 
-            use_mates=self.use_mates
+            use_mates=self.use_mates,
+            data_influence_model=self.data_influence_model,
         )
 
         # Do local training

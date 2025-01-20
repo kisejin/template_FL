@@ -26,7 +26,6 @@ def get_rouge_score(predictions, targets):
     for prediction, target in zip(predictions, targets):
         prediction = get_answer(clean_output_text(prediction))
         target = get_answer(clean_output_text(target))
-        # print(f"Prediction: {prediction} \nTarget: {target}")
         rouge_output = rouge.score(prediction=prediction, target=target)
         scores['rouge1'] += round(rouge_output["rouge1"].fmeasure, 4)
         scores['rouge2'] += round(rouge_output["rouge2"].fmeasure, 4)

@@ -11,7 +11,7 @@ from peft import (
     set_peft_model_state_dict,
 )
 from peft.utils import prepare_model_for_kbit_training
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainerCallback
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainerCallback, BertForSequenceClassification
 
 from flwr.common.typing import NDArrays
 from transformers.trainer_callback import TrainerControl, TrainerState
@@ -87,6 +87,23 @@ def get_model(model_cfg: DictConfig):
     )
 
     return get_peft_model(model, peft_config), tokenizer
+
+def get_data_influence_model(model_cfg: DictConfig):
+    use_cuda = torch.cuda.is_available()
+    device_map = torch.device("cuda:0" if use_cuda else "cpu")
+
+    # Load model with num_labels=1
+    model = BertForSequenceClassification.from_pretrained(
+        "bert-base-uncased",
+        num_labels=1,  # Set number of labels to 1 for regression or single-class tasks
+    ).to(device_map)
+    
+    if use_cuda:
+        model = prepare_model_for_kbit_training(
+            model, use_gradient_checkpointing=model_cfg.gradient_checkpointing
+        )
+
+    return model
 
 
 def set_parameters(model, parameters: NDArrays) -> None:

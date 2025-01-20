@@ -23,16 +23,20 @@ class ManualLLMSampleCB:
         )
 
     def generate(self, prompt):
+        # Tokenize the input prompt and include the attention mask
         tokenized_prompt = self.tokenizer(prompt, return_tensors='pt').to(self.model.device)
         input_ids = tokenized_prompt['input_ids']
+        attention_mask = tokenized_prompt['attention_mask']  # Extract attention mask
 
         with torch.no_grad():
             output = self.model.generate(
                 input_ids=input_ids,
+                attention_mask=attention_mask,
                 max_new_tokens=self.max_new_tokens,
                 generation_config=self.gen_config
             )
         return self.tokenizer.decode(output[0], skip_special_tokens=True)
+
 
     def create_samples_table(self, dataset):
         table = wandb.Table(columns=["input", "prediction", "label", "task"])
@@ -61,7 +65,7 @@ class ManualLLMSampleCB:
 class ManualTrainer:
     def __init__(
         self, model, tokenizer, train_dataset, val_dataset, holdout_dataset, reference_dataset,
-        args, data_collator, compute_metrics, use_mates
+        args, data_collator, compute_metrics, use_mates, data_influence_model
     ):
         self.accelerator = Accelerator()
         self.model = model
@@ -70,6 +74,7 @@ class ManualTrainer:
         self.data_collator = data_collator
         self.compute_metrics = compute_metrics
         self.use_mates = use_mates
+        self.data_influence_model = data_influence_model
 
         # Remove unused columns from datasets
         if train_dataset:
@@ -101,7 +106,6 @@ class ManualTrainer:
             self.holdout_dataset = self._remove_unused_columns(holdout_dataset, "holdout")
             self.reference_dataset = self._remove_unused_columns(reference_dataset, "reference")
 
-        if use_mates:
             self.holdout_loader = DataLoader(
                 self.holdout_dataset,
                 batch_size=self.args.per_device_train_batch_size,
@@ -131,11 +135,9 @@ class ManualTrainer:
 
         if self.use_mates:
             # Prepare holdout and reference loaders for Accelerator
-            self.holdout_loader, self.reference_loader = self.accelerator.prepare(
-                self.holdout_loader, self.reference_loader
+            self.data_influence_model, self.holdout_loader, self.reference_loader = self.accelerator.prepare(
+                self.data_influence_model, self.holdout_loader, self.reference_loader
             )
-            # Initialize data influence model
-            self.data_influence_model = self.initialize_data_influence_model()
 
     def _remove_unused_columns(self, dataset, description=None):
         """
@@ -174,11 +176,6 @@ class ManualTrainer:
             )
 
         return dataset.remove_columns(ignored_columns)
-
-    def initialize_data_influence_model(self):
-        # Initialize the data influence model for predicting data influence
-        model = BertForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=1)
-        return self.accelerator.prepare(model)
 
     def train(self):
         best_val_loss = float('inf')
@@ -334,10 +331,7 @@ class ManualTrainer:
             for seq in all_labels
         ])
 
-        metrics = self.compute_metrics({
-            "predictions": padded_preds,
-            "label_ids": padded_labels
-        })
+        metrics = self.compute_metrics({"predictions": padded_preds, "label_ids": padded_labels})
 
         metrics.update({"eval_loss": val_loss / len(self.val_loader)})
         print("Validation Metrics:", metrics)

@@ -9,7 +9,7 @@ import pandas as pd
 
 FDS = None  # Cache FederatedDataset
 client_id_ds = None
-global_test_set_homo = None
+# global_test_set_homo = None
 
 def split_train_test(dataset, test_size):
     # Split the dataset into train and test sets
@@ -80,17 +80,17 @@ def load_data_homo(partition_id: int, num_partitions: int, dataset_name: str):
             dataset=dataset_name,
             partitioners={"train": partitioner},
         )
-        list_ds = []
-        for cid in num_partitions:
-            tmp_set = FDS.load_partition(cid, "train")
-            list_ds.append(
-                pd.DataFrame(tmp_set)
-            )
-        list_ds = pd.concat(list_ds, ignore_index=True)
-        _, global_test_set_homo = train_test_split(
-                list_ds, test_size=0.1, shuffle=True, random_state=42
-        )
-        global_test_set_homo = Dataset.from_pandas(global_test_set_homo).remove_columns(['__index_level_0__'])
+        # list_ds = []
+        # for cid in num_partitions:
+        #     tmp_set = FDS.load_partition(cid, "train")
+        #     list_ds.append(
+        #         pd.DataFrame(tmp_set)
+        #     )
+        # list_ds = pd.concat(list_ds, ignore_index=True)
+        # _, global_test_set_homo = train_test_split(
+        #         list_ds, test_size=0.1, shuffle=True, random_state=42
+        # )
+        # global_test_set_homo = Dataset.from_pandas(global_test_set_homo).remove_columns(['__index_level_0__'])
             
     print(f"<---- Load client {partition_id} --->")
     client_trainset = FDS.load_partition(partition_id, "train")

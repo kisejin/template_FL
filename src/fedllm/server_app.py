@@ -6,6 +6,7 @@ import wandb
 import numpy as np
 from dotenv import load_dotenv
 from datetime import datetime
+from datasets import load_dataset, Dataset
 from tqdm import tqdm
 
 from transformers import DataCollatorForSeq2Seq, DataCollatorWithPadding, TrainingArguments, Trainer, GenerationConfig
@@ -16,9 +17,10 @@ from flwr.common.config import unflatten_dict
 from flwr.server import ServerApp, ServerAppComponents, ServerConfig
 # from flwr.server.strategy import FedAvg
 from omegaconf import DictConfig
+from sklearn.model_selection import train_test_split
 
 from .models import get_model, get_parameters, set_parameters
-from .dataset import replace_keys, global_test_set_homo
+from .dataset import replace_keys
 from .myfedavg import FedAvg
 from .data_domains import global_test_set_hete
 from .make_data import Prompter, generate_and_tokenize_prompt
@@ -168,7 +170,7 @@ def test_model(dataset, model, tokenizer, train_cfg, tmp_dict, sround, task):
 # Get function that will be executed by the strategy's evaluate() method
 # Here we use it to save global model checkpoints
 
-def get_evaluate_fn(train_cfg, model_cfg, dataset_cfg, save_every_round, total_round, save_path):
+def get_evaluate_fn(train_cfg, model_cfg, dataset_cfg, save_every_round, total_round, total_nodes, save_path):
     """Return an evaluation function for saving global model."""
 
     def evaluate(server_round: int, parameters, config):
@@ -188,6 +190,11 @@ def get_evaluate_fn(train_cfg, model_cfg, dataset_cfg, save_every_round, total_r
                 "tokenizer": tokenizer,
             }
             if dataset_cfg.type == 'homo':
+                ds = load_dataset(dataset_cfg.name)
+                _, test = train_test_split(
+                    ds, test_size=0.09, shuffle=True, random_state=42
+                )
+                global_test_set_homo = Dataset.from_pandas(test).remove_columns(['__index_level_0__'])
                 loss, metrics = test_model(global_test_set_homo, model, tokenizer, train_cfg, tmp_dict, server_round, 'homo')
                 total_loss = loss
                 result_metric = {'homo_f1': metrics['homo_f1']}
@@ -255,6 +262,7 @@ def server_fn(context: Context):
 
     # Read from config
     num_rounds = context.run_config["num-server-rounds"]
+    num_nodes = context.run_config['num-supernodes']
     cfg = DictConfig(replace_keys(unflatten_dict(context.run_config)))
 
     # Get initial model weights
@@ -270,7 +278,7 @@ def server_fn(context: Context):
         fit_metrics_aggregation_fn=fit_weighted_average,
         initial_parameters=init_model_parameters,
         evaluate_fn=get_evaluate_fn(
-            cfg.train, cfg.model, cfg.dataset, cfg.train.save_every_round, num_rounds, save_path
+            cfg.train, cfg.model, cfg.dataset, cfg.train.save_every_round, num_rounds, num_nodes, save_path
         ),
     )
     config = ServerConfig(num_rounds=num_rounds)

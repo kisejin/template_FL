@@ -147,6 +147,7 @@ class FlowerClient(NumPyClient):
             .map(
                 lambda x: generate_and_tokenize_prompt(x, **tmp_dict),
                 num_proc=8,
+                remove_columns=['instruction', 'input', 'output']
             )
         )
 
@@ -156,6 +157,7 @@ class FlowerClient(NumPyClient):
             .map(
                 lambda x: generate_and_tokenize_prompt(x, **tmp_dict),
                 num_proc=8,
+                remove_columns=['instruction', 'input', 'output']
             )
         )
 

@@ -86,9 +86,7 @@ class FlowerClient(NumPyClient):
         self,
         model_cfg: DictConfig,
         train_cfg: DictConfig,
-        use_mates: bool,
-        holdout_ratio,
-        reference_ratio,
+        mates_args: DictConfig,
         trainset,
         valset,
         num_rounds,
@@ -102,9 +100,7 @@ class FlowerClient(NumPyClient):
         self.num_rounds = num_rounds
         self.trainset = trainset
         self.valset = valset
-        self.use_mates = use_mates
-        self.holdout_ratio = holdout_ratio
-        self.reference_ratio = reference_ratio
+        self.mates_args = mates_args
         self.holdoutset = None
         self.refset = None
         self.data_influence_model = None
@@ -112,7 +108,7 @@ class FlowerClient(NumPyClient):
         # instantiate model
         self.model, self.tokenizer = get_model(model_cfg)
         
-        if self.use_mates:
+        if self.mates_args.state:
             self.data_influence_model = get_data_influence_model(model_cfg)      
         
         # (
@@ -187,13 +183,13 @@ class FlowerClient(NumPyClient):
             )
         )
 
-        # Create holdoutset and refset if use_mates is True
-        if self.use_mates:
+        # Create holdoutset and refset if state is True
+        if self.mates_args.state:
             trainset_size = len(self.trainset)
 
             # Calculate sizes for holdout and reference sets
-            holdout_size = int(trainset_size * self.holdout_ratio)
-            ref_size = int(trainset_size * self.reference_ratio)
+            holdout_size = int(trainset_size * self.mates_args.holdout_ratio)
+            ref_size = int(trainset_size * self.mates_args.reference_ratio)
 
             # Shuffle the trainset to ensure randomness
             shuffled_indices = list(range(trainset_size))
@@ -263,7 +259,7 @@ class FlowerClient(NumPyClient):
             args=self.training_arguments,
             data_collator=self.data_collator,
             compute_metrics=self.compute_metrics, 
-            use_mates=self.use_mates,
+            mates_args=self.mates_args,
             data_influence_model=self.data_influence_model,
         )
 
@@ -309,9 +305,7 @@ def client_fn(context: Context) -> FlowerClient:
     return FlowerClient(
         cfg.model,
         cfg.train,
-        cfg.mates.state,
-        cfg.mates.holdout_ratio,
-        cfg.mates.reference_ratio,
+        cfg.mates,
         client_set['train'],
         client_set['test'],
         num_rounds,

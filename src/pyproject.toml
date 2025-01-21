@@ -47,9 +47,12 @@ model.gradient-checkpointing = true
 model.flash_attention = false
 
 # Use MATES
-mates.state = false
-mates.holdout_ratio = 0.1
-mates.reference_ratio = 0.1
+mates.state = true
+mates.holdout-ratio = 0.01
+mates.reference-ratio = 0.001
+mates.check-reference-step = 50
+mates.update-data-influence-model-step = 20
+mates.selection-fraction = 0.4
 
 # Define LoRA settings
 model.lora.lora-r = 8 

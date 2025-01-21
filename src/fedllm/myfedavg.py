@@ -17,7 +17,10 @@
 Paper: arxiv.org/abs/1602.05629
 """
 
-
+import time
+import wandb
+import pickle
+import logging
 from logging import WARNING
 from typing import Callable, Optional, Union
 
@@ -46,6 +49,10 @@ Setting `min_available_clients` lower than `min_fit_clients` or
 connected to the server. `min_available_clients` must be set to a value larger
 than or equal to the values of `min_fit_clients` and `min_evaluate_clients`.
 """
+
+# Obtain a module-level logger:
+logger = logging.getLogger(__name__)
+
 
 client_id_idx = {}
 
@@ -111,6 +118,8 @@ class FedAvg(Strategy):
         fit_metrics_aggregation_fn: Optional[MetricsAggregationFn] = None,
         evaluate_metrics_aggregation_fn: Optional[MetricsAggregationFn] = None,
         inplace: bool = True,
+        num_rounds: int = 10,
+        comm_table = None
     ) -> None:
         super().__init__()
 
@@ -133,6 +142,8 @@ class FedAvg(Strategy):
         self.fit_metrics_aggregation_fn = fit_metrics_aggregation_fn
         self.evaluate_metrics_aggregation_fn = evaluate_metrics_aggregation_fn
         self.inplace = inplace
+        self.num_rounds = num_rounds
+        self.comm_table = comm_table
 
     def __repr__(self) -> str:
         """Compute a string representation of the strategy."""
@@ -289,3 +300,73 @@ class FedAvg(Strategy):
             log(WARNING, "No evaluate_metrics_aggregation_fn provided")
 
         return loss_aggregated, metrics_aggregated
+
+    
+
+class MyFedAvg(FedAvg):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # # Track total communication metrics across all rounds
+        # self.total_bytes_sent = 0
+        # self.total_bytes_received = 0
+        # self.round_bytes_sent = {}
+        # self.round_bytes_received = {}
+
+        # If you want to measure "communication time" (for the aggregation step)
+        self.total_comm_time = 0.0
+        self.round_comm_time = {}
+    
+    def _get_param_size_estimate(self, parameters):
+        """
+        Return an estimate of the parameter size in bytes.
+        Approach 1: Summation of NDArray .nbytes 
+        Approach 2: pickle.dumps(...) for more accurate overhead measure
+        """
+        # Approach 1 (fast):
+        size = 0
+        # print(len(parameters.tensors)
+        size = sum([len(tensor) for tensor in parameters.tensors])
+        return size
+    
+        # Approach 2 (optional, more accurate but slower):
+        # all_params = [tensor for tensor in parameters.tensors]
+        # data = pickle.dumps(all_params)
+        # return len(data)
+
+    def aggregate_fit(
+        self,
+        server_round: int,
+        results: list[tuple[ClientProxy, FitRes]],
+        failures: list[Union[tuple[ClientProxy, FitRes], BaseException]],
+    ) -> tuple[Optional[Parameters], dict[str, Scalar]]:
+        
+        
+        # Optionally measure how long the aggregation (and the associated communication) takes
+        start_time = time.time()
+        
+        # Let FedAvg do its usual job (averaging the model updates)
+        aggregated_parameters = super().aggregate_fit(server_round, results, failures)
+        
+        end_time = time.time()
+        comm_time = end_time - start_time
+        self.total_comm_time += comm_time
+        self.round_comm_time[server_round] = comm_time
+        
+        
+        # Print/log each round's communication metrics
+        logger.info(
+            f"[Round {server_round}] | Comm time: {comm_time:.2f}s"
+        )
+        
+        # If wandb is active, log to wandb
+        self.comm_table.add_data(
+            server_round,
+            comm_time,
+            # # Optionally track cumulative totals
+            # "total_bytes_sent_MB": self.total_bytes_sent / (1024**2),
+            # "total_bytes_received_MB": self.total_bytes_received / (1024**2),
+            self.total_comm_time,
+        )
+        print(f"[Round {server_round}] | Comm time: {comm_time:.2f}s | Total Comm Time: {self.total_comm_time:.2f}s")
+
+        return aggregated_parameters

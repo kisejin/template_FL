@@ -37,7 +37,7 @@ num-server-rounds = 1
 num-supernodes = 10
 
 # Define dataset
-dataset.type = 'hete' # type = ['homo','hete']
+dataset.type = 'homo' # type = ['homo','hete']
 dataset.name = "vicgalle/alpaca-gpt4"
 
 # Define model settings

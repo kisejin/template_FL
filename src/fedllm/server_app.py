@@ -4,10 +4,12 @@ import os
 import torch
 import wandb
 import numpy as np
+import pandas as pd
 from dotenv import load_dotenv
 from datetime import datetime
 from datasets import load_dataset, Dataset
 from tqdm import tqdm
+import logging
 
 from transformers import DataCollatorForSeq2Seq, DataCollatorWithPadding, TrainingArguments, Trainer, GenerationConfig
 from transformers.integrations import WandbCallback
@@ -21,7 +23,7 @@ from sklearn.model_selection import train_test_split
 
 from .models import get_model, get_parameters, set_parameters
 from .dataset import replace_keys
-from .myfedavg import FedAvg
+from .myfedavg import FedAvg, MyFedAvg
 from .data_domains import global_test_set_hete
 from .make_data import Prompter, generate_and_tokenize_prompt
 from .metrics import exact_match, f1, get_rouge_score
@@ -32,6 +34,13 @@ os.environ["WANDB_API_KEY"] = os.getenv("WANDB_API_KEY")
 os.environ["WANDB_NAME"] = os.getenv("WANDB_NAME")
 os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN")
 # os.environ["WANDB_LOG_MODEL"] = "checkpoint"
+
+logging.basicConfig(
+    level=logging.INFO,                         # or DEBUG, WARNING, etc.
+    format="%(asctime)s %(levelname)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    filename="flower_server.log",   # Uncomment to write logs to a file
+)
 
 
 
@@ -191,6 +200,7 @@ def get_evaluate_fn(train_cfg, model_cfg, dataset_cfg, save_every_round, total_r
             }
             if dataset_cfg.type == 'homo':
                 ds = load_dataset(dataset_cfg.name)
+                ds = pd.DataFrame(ds['train'])
                 _, test = train_test_split(
                     ds, test_size=0.09, shuffle=True, random_state=42
                 )
@@ -255,6 +265,21 @@ def fit_weighted_average(metrics):
 def server_fn(context: Context):
     """Construct components that set the ServerApp behaviour."""
     # Create output directory given current timestamp
+    wandb.init(
+        project="huggingface",
+        name=f"Global_communication_cost",
+    )
+    
+    comm_table = wandb.Table(columns=[
+        "round",
+        # "bytes_sent_MB",
+        # "bytes_received_MB",
+        "comm_time_s",
+        # "total_bytes_sent_MB",
+        # "total_bytes_received_MB",
+        "total_comm_time_s"
+    ])
+    
     current_time = datetime.now()
     folder_name = current_time.strftime("%Y-%m-%d_%H-%M-%S")
     save_path = os.path.join(os.getcwd(), f"results/{folder_name}")
@@ -270,18 +295,40 @@ def server_fn(context: Context):
     init_model_parameters = get_parameters(init_model)
     init_model_parameters = ndarrays_to_parameters(init_model_parameters)
 
-    # Define strategy
-    strategy = FedAvg(
+    # Define orginal FedAVG strategy
+    # strategy = FedAvg(
+    #     fraction_fit=cfg.train.strategy.fraction_fit,
+    #     fraction_evaluate=cfg.train.strategy.fraction_evaluate,
+    #     on_fit_config_fn=get_on_fit_config(save_path),
+    #     fit_metrics_aggregation_fn=fit_weighted_average,
+    #     initial_parameters=init_model_parameters,
+    #     evaluate_fn=get_evaluate_fn(
+    #         cfg.train, cfg.model, cfg.dataset, cfg.train.save_every_round, num_rounds, num_nodes, save_path
+    #     ),
+    # )
+    
+    # Define extend FedAvg version which includes communication cost per round calculating 
+    strategy = MyFedAvg(
         fraction_fit=cfg.train.strategy.fraction_fit,
         fraction_evaluate=cfg.train.strategy.fraction_evaluate,
         on_fit_config_fn=get_on_fit_config(save_path),
         fit_metrics_aggregation_fn=fit_weighted_average,
         initial_parameters=init_model_parameters,
         evaluate_fn=get_evaluate_fn(
-            cfg.train, cfg.model, cfg.dataset, cfg.train.save_every_round, num_rounds, num_nodes, save_path
+            cfg.train, cfg.model, cfg.dataset,
+            cfg.train.save_every_round,
+            num_rounds,
+            num_nodes,
+            save_path
         ),
+        num_rounds=num_rounds,
+        comm_table=comm_table
     )
+    
+    
+    
     config = ServerConfig(num_rounds=num_rounds)
+    wandb.log({"communication_cost": comm_table})
 
     return ServerAppComponents(strategy=strategy, config=config)
 

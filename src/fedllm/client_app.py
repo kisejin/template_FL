@@ -104,12 +104,13 @@ class FlowerClient(NumPyClient):
         self.holdoutset = None
         self.refset = None
         self.data_influence_model = None
+        self.data_influence_tokenizer = None
 
         # instantiate model
         self.model, self.tokenizer = get_model(model_cfg)
         
         if self.mates_args.state:
-            self.data_influence_model = get_data_influence_model(model_cfg)      
+            self.data_influence_model, self.data_influence_tokenizer = get_data_influence_model(model_cfg)      
         
         # (
         #     self.data_collator, 
@@ -261,6 +262,7 @@ class FlowerClient(NumPyClient):
             compute_metrics=self.compute_metrics, 
             mates_args=self.mates_args,
             data_influence_model=self.data_influence_model,
+            data_influence_tokenizer=self.data_influence_tokenizer,
         )
 
         # Do local training

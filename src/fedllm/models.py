@@ -98,12 +98,14 @@ def get_data_influence_model(model_cfg: DictConfig):
         num_labels=1,  # Set number of labels to 1 for regression or single-class tasks
     ).to(device_map)
     
+    tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
+    
     if use_cuda:
         model = prepare_model_for_kbit_training(
             model, use_gradient_checkpointing=model_cfg.gradient_checkpointing
         )
 
-    return model
+    return model, tokenizer
 
 
 def set_parameters(model, parameters: NDArrays) -> None:

@@ -48,7 +48,7 @@ model.flash_attention = false
 
 # Use MATES
 mates.state = true
-mates.holdout-ratio = 0.01
+mates.holdout-ratio = 0.005
 mates.reference-ratio = 0.001
 mates.check-reference-step = 50
 mates.update-data-influence-model-step = 20

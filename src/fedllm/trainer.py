@@ -269,7 +269,7 @@ class ManualTrainer:
                     text,
                     truncation=True,
                     padding='max_length',
-                    max_length=512,
+                    max_length=256,
                     return_tensors='pt'
                 ).to(self.accelerator.device)
 
@@ -375,7 +375,7 @@ class ManualTrainer:
                 text,
                 truncation=True,
                 padding='max_length',
-                max_length=512,
+                max_length=256,
                 return_tensors='pt'
             ).to(self.accelerator.device)
 

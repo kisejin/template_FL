@@ -28,13 +28,7 @@ from .dataset import (
     load_data_hete,
     replace_keys,
 )
-from .models import (
-    cosine_annealing,
-    get_model,
-    get_data_influence_model,
-    set_parameters,
-    get_parameters,
-)
+from .models import *
 
 from .flwr_mods import get_wandb_mod
 from .metrics import exact_match, f1, get_rouge_score
@@ -211,7 +205,12 @@ class FlowerClient(NumPyClient):
         self, parameters: NDArrays, config: Dict[str, Scalar]
     ) -> Tuple[NDArrays, int, Dict]:
         """Implement distributed fit function for a given client."""
-        set_parameters(self.model, parameters)
+        if self.mates_args.state and int(config["current_round"]) != 1:
+            main_model_params, data_influence_model_params = split_models(parameters)
+            set_parameters(self.model, main_model_params)
+            set_parameters_bert(self.data_influence_model, data_influence_model_params)
+        else:
+            set_parameters(self.model, parameters)
 
         new_lr = cosine_annealing(
             int(config["current_round"]),
@@ -265,8 +264,16 @@ class FlowerClient(NumPyClient):
             data_influence_tokenizer=self.data_influence_tokenizer,
         )
 
-        # Do local training
+        # Train the model
         results = trainer.train()
+        
+        if self.mates_args.state:
+            # After training
+            main_model_params = get_parameters(self.model)
+            data_influence_model_params = model_parameters_to_ndarrays(self.data_influence_model)
+            final_model_params = concatenate_models_with_marker(main_model_params, data_influence_model_params)
+        else:
+            final_model_params = get_parameters(self.model)
         
         # Calculate FLOPs
         with get_accelerator().device('cuda:0'):
@@ -282,10 +289,9 @@ class FlowerClient(NumPyClient):
             macs_value = convert_to_float(macs)
             params_value = convert_to_float(params)
             wandb.log({"total_flops": flops_value, "macs": macs_value, "params": params_value})  # wa
-    
-        
+            
         return (
-            get_parameters(self.model),
+            final_model_params,
             len(self.trainset),
             {"train_loss": results['training_loss'], "flops": flops_value},
         )

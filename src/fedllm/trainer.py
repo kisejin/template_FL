@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 class ManualLLMSampleCB:
     def __init__(self, model, tokenizer, task, num_samples=10, max_new_tokens=256):
         self.model = model
+        self.concat_model = None
         self.tokenizer = tokenizer
         self.task = task
         self.num_samples = num_samples
@@ -90,6 +91,7 @@ class ManualTrainer:
             )
         else:
             self.train_loader = None
+            self.full_train_loader = None
             
         if val_dataset:
             self.val_dataset = self._remove_unused_columns(val_dataset, "validation")          
@@ -193,7 +195,7 @@ class ManualTrainer:
             # Filter high-quality data using the data influence model
             high_quality_indices = self.select_high_quality_data(
                 dataset_size=len(self.train_dataset),
-                selection_size=int(len(self.train_dataset) * self.mates_args.selection_fraction),
+                selection_fraction=self.mates_args.selection_fraction,
             )
             self.train_loader = self.accelerator.prepare(
                 self.create_filtered_dataloader(high_quality_indices)
@@ -239,10 +241,10 @@ class ManualTrainer:
                 if early_stopping_counter >= early_stopping_patience:
                     print("Early stopping triggered")
                     break
-
+            
         return {"training_loss": sum(training_loss) / len(training_loss), "best_val_loss": best_val_loss}
 
-    def select_high_quality_data(self, dataset_size, selection_size):
+    def select_high_quality_data(self, dataset_size, selection_fraction):
         """
         Use the data influence model to predict quality scores and select high-quality data indices.
         """
@@ -254,6 +256,7 @@ class ManualTrainer:
         influence_optimizer = self.accelerator.prepare(
             torch.optim.AdamW(self.data_influence_model.parameters(), lr=self.args.learning_rate)
         )
+        i = 0
         with torch.no_grad():
             for batch in self.full_train_loader:  # Full dataset loader        
                 text = self.tokenizer.batch_decode(
@@ -279,6 +282,10 @@ class ManualTrainer:
                 
                 influence_scores.extend(outputs.logits.squeeze(-1).cpu().numpy())
                 
+                i += 1
+                
+                if i == 100:
+                    break
 
         # Normalize influence scores and apply Gumbel-Top-$k$ selection
         influence_scores = np.array(influence_scores)
@@ -290,6 +297,7 @@ class ManualTrainer:
         influence_scores += gumbel_noise
 
         # Select top indices based on influence scores
+        selection_size = int(len(influence_scores)*selection_fraction)
         high_quality_indices = np.argpartition(-influence_scores, selection_size)[:selection_size]
         print(f"Selected {len(high_quality_indices)} high-quality samples.")
 
@@ -303,10 +311,10 @@ class ManualTrainer:
         subset_dataset = torch.utils.data.Subset(self.train_dataset, indices)
         return torch.utils.data.DataLoader(
             subset_dataset,
-            batch_size=self.args.train_batch_size,
+            batch_size=self.args.per_device_train_batch_size,
             shuffle=True,
-            collate_fn=self.train_loader.collate_fn,  # Use the same collate function
-            num_workers=self.args.num_workers,
+            collate_fn=self.data_collator,  # Use the same collate function
+            drop_last=self.args.dataloader_drop_last
         )
 
 
@@ -317,8 +325,6 @@ class ManualTrainer:
         optimizer = self.accelerator.prepare(
             torch.optim.Adam(copied_model.parameters(), lr=self.args.learning_rate)
         )
-        temp_holdout_losses = []
-        temp_holdout_texts = []
         holdout_reference_pairs = []
 
         print("Starting to collect holdout-reference pairs...")
@@ -332,47 +338,31 @@ class ManualTrainer:
                 labels=holdout_batch['labels']
             )
             holdout_loss = outputs.loss
-            temp_holdout_losses.append(holdout_loss.item())
             decoded_texts = self.tokenizer.batch_decode(
                 holdout_batch['input_ids'], 
                 skip_special_tokens=True
             )
-            temp_holdout_texts.extend(decoded_texts)
 
             holdout_loss.backward()
             optimizer.step()
 
-            if (step % self.mates_args.check_reference_step == 0 and step != 0) or (step == len(self.holdout_loader) - 1):
-                print(f"Evaluating reference losses at step {step}...")
-                copied_model.eval()
-                reference_losses = []
+            print(f"Evaluating reference losses at step {step}...")
+            copied_model.eval()
+            reference_losses = []
 
-                with torch.no_grad():
-                    for ref_batch in self.reference_loader:
-                        outputs = copied_model(
-                            input_ids=ref_batch['input_ids'],
-                            attention_mask=ref_batch['attention_mask'],
-                            labels=ref_batch['labels']
-                        )
-                        reference_losses.append(outputs.loss.item())
-
-                min_ref_loss, max_ref_loss = min(reference_losses), max(reference_losses)
-                if len(temp_holdout_losses) > 1:
-                    norm_holdout_losses = [
-                        (loss - min(temp_holdout_losses)) / (max(temp_holdout_losses) - min(temp_holdout_losses))
-                        for loss in temp_holdout_losses
-                    ]
-                    holdout_scores = [
-                        min_ref_loss + norm_loss * (max_ref_loss - min_ref_loss)
-                        for norm_loss in norm_holdout_losses
-                    ]
-
-                    for holdout_data, score in zip(temp_holdout_texts, holdout_scores):
-                        holdout_reference_pairs.append((holdout_data, score))
-
-                temp_holdout_texts.clear()
-                temp_holdout_losses.clear()
-                copied_model.train()
+            with torch.no_grad():
+                for ref_batch in self.reference_loader:
+                    outputs = copied_model(
+                        input_ids=ref_batch['input_ids'],
+                        attention_mask=ref_batch['attention_mask'],
+                        labels=ref_batch['labels']
+                    )
+                    reference_losses.append(outputs.loss.item())
+            
+            # Compute the mean of reference losses
+            score = sum(reference_losses) / len(reference_losses) if reference_losses else 0.0
+            holdout_reference_pairs.append((decoded_texts, score))
+            # copied_model.train()
 
         # Train the data influence model using the generated pairs
         print("Starting to train the data influence model...")

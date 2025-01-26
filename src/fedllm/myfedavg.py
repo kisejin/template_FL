@@ -111,6 +111,7 @@ class FedAvg(Strategy):
         fit_metrics_aggregation_fn: Optional[MetricsAggregationFn] = None,
         evaluate_metrics_aggregation_fn: Optional[MetricsAggregationFn] = None,
         inplace: bool = True,
+        use_mates: bool = False,
     ) -> None:
         super().__init__()
 
@@ -133,6 +134,7 @@ class FedAvg(Strategy):
         self.fit_metrics_aggregation_fn = fit_metrics_aggregation_fn
         self.evaluate_metrics_aggregation_fn = evaluate_metrics_aggregation_fn
         self.inplace = inplace
+        self.use_mates = use_mates
 
     def __repr__(self) -> str:
         """Compute a string representation of the strategy."""
@@ -239,6 +241,8 @@ class FedAvg(Strategy):
         if self.inplace:
             # Does in-place weighted average of results
             aggregated_ndarrays = aggregate_inplace(results)
+        elif self.use_mates:
+            aggregated_ndarrays = aggregate_inplace_mates(results)
         else:
             # Convert results
             weights_results = [

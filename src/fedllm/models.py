@@ -21,6 +21,8 @@ import wandb
 from typing import Dict, List
 import copy
 import time
+import numpy as np
+
 
 def cosine_annealing(
     current_round: int,
@@ -120,3 +122,79 @@ def get_parameters(model) -> NDArrays:
     """Return the parameters of the current net."""
     state_dict = get_peft_model_state_dict(model)
     return [val.cpu().numpy() for _, val in state_dict.items()]
+
+def model_parameters_to_ndarrays(model):
+    """
+    Convert the parameters of a HuggingFace model into a list of NDArrays.
+
+    Args:
+        model (torch.nn.Module): The HuggingFace model.
+
+    Returns:
+        list[NDArrays]: A list of NumPy arrays representing the model's parameters.
+    """
+    ndarrays = []
+    for param_tensor in model.state_dict().values():
+        # Convert PyTorch tensor to NumPy array
+        ndarrays.append(param_tensor.cpu().numpy())
+    return ndarrays
+
+
+def concatenate_models_with_marker(main_model_params: list[NDArrays], 
+                                   data_influence_model_params: list[NDArrays],
+                                   marker_value: float = np.nan) -> list[NDArrays]:
+    """
+    Concatenate two models' parameters with a unique marker.
+
+    Args:
+        main_model_params (list[NDArrays]): Parameters of the main model as NDArrays.
+        data_influence_model_params (list[NDArrays]): Parameters of the data influence model as NDArrays.
+        marker_value (float): A unique marker value to separate the two models.
+
+    Returns:
+        list[NDArrays]: A single list of NDArrays with the unique marker separating the models.
+    """
+    marker = np.array([marker_value])  # Unique marker
+    concatenated_params = main_model_params + [marker] + data_influence_model_params
+    return concatenated_params
+
+
+def split_models(concatenated_model: list[NDArrays]) -> tuple[list[NDArrays], list[NDArrays]]:
+    """Split the concatenated model back into main and data influence models."""
+    # Find the marker's index
+    marker_index = next(
+        (i for i, param in enumerate(concatenated_model) if np.isnan(param).all()),
+        -1,
+    )
+    if marker_index == -1:
+        raise ValueError("Marker not found in the concatenated model parameters.")
+
+    main_model = concatenated_model[:marker_index]
+    data_influence_model = concatenated_model[marker_index + 1 :]
+    return main_model, data_influence_model
+
+
+def set_parameters_bert(model: BertForSequenceClassification, parameters: list[NDArrays]) -> None:
+    """
+    Set the parameters of a BertForSequenceClassification model using the given ones.
+
+    Args:
+        model (BertForSequenceClassification): The model whose parameters need to be updated.
+        parameters (list[NDArrays]): A list of NumPy arrays representing the parameters.
+    """
+    # Get the state_dict keys from the model
+    state_dict_keys = model.state_dict().keys()
+    
+    # Ensure the number of parameters matches the model's state_dict
+    if len(parameters) != len(state_dict_keys):
+        raise ValueError(
+            f"Number of parameters ({len(parameters)}) does not match "
+            f"the number of state_dict keys ({len(state_dict_keys)})."
+        )
+    
+    # Create an OrderedDict to update the model
+    params_dict = zip(state_dict_keys, parameters)
+    state_dict = OrderedDict({k: torch.Tensor(v) for k, v in params_dict})
+    
+    # Load the updated state_dict into the model
+    model.load_state_dict(state_dict)

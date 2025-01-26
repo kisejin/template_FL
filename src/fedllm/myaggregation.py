@@ -23,6 +23,8 @@ import numpy as np
 from flwr.common import FitRes, NDArray, NDArrays, parameters_to_ndarrays
 from flwr.server.client_proxy import ClientProxy
 
+from .models import split_models
+
 
 def aggregate(results: list[tuple[NDArrays, int]]) -> NDArrays:
     """Compute weighted average."""
@@ -80,6 +82,39 @@ def aggregate_inplace(results: list[tuple[ClientProxy, FitRes]]) -> NDArrays:
         ]
 
     return params
+
+def aggregate_inplace_mates(results: list[tuple[ClientProxy, FitRes]]) -> NDArrays:
+    """Aggregate main model and data influence model separately."""
+    num_examples_total = sum(fit_res.num_examples for _, fit_res in results)
+    scaling_factors = [
+        fit_res.num_examples / num_examples_total for _, fit_res in results
+    ]
+
+    aggregated_main_model = None
+    aggregated_data_influence_model = None
+
+    for i, (_, fit_res) in enumerate(results):
+        # Convert parameters to NDArrays and split into main and data influence models
+        concatenated_params = parameters_to_ndarrays(fit_res.parameters)
+        main_model, data_influence_model = split_models(concatenated_params)
+
+        # Scale the models by the scaling factor
+        scaled_main_model = [x * scaling_factors[i] for x in main_model]
+        scaled_data_influence_model = [x * scaling_factors[i] for x in data_influence_model]
+
+        # Aggregate in-place
+        if aggregated_main_model is None:
+            aggregated_main_model = scaled_main_model
+            aggregated_data_influence_model = scaled_data_influence_model
+        else:
+            aggregated_main_model = [
+                x + y for x, y in zip(aggregated_main_model, scaled_main_model)
+            ]
+            aggregated_data_influence_model = [
+                x + y for x, y in zip(aggregated_data_influence_model, scaled_data_influence_model)
+            ]
+
+    return concatenate_models_with_marker(aggregated_main_model, aggregated_data_influence_model)
 
 
 def aggregate_median(results: list[tuple[NDArrays, int]]) -> NDArrays:
@@ -315,8 +350,8 @@ def _find_reference_weights(
     ----------
     reference_weights: NDArrays
         Weights that will be searched for.
-    list_of_weights: List[NDArrays]
-        List of weights that will be searched through.
+    list_of_weights: list[NDArrays]
+        list of weights that will be searched through.
 
     Returns
     -------

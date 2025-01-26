@@ -144,6 +144,8 @@ def test_model(dataset, model, tokenizer, train_cfg, tmp_dict, sround, mates_arg
     #     compute_metrics=compute_metrics,
     #     tokenizer=tokenizer
     # )
+    
+    mates_args.state = False
 
     trainer = ManualTrainer(
         model= model,
@@ -155,7 +157,7 @@ def test_model(dataset, model, tokenizer, train_cfg, tmp_dict, sround, mates_arg
         args=training_arguments,
         data_collator=data_collator,
         compute_metrics=compute_metrics, 
-        use_mates=False,
+        mates_args=mates_args,
         data_influence_model=None,
         data_influence_tokenizer=None,
     )
@@ -194,8 +196,10 @@ def get_evaluate_fn(train_cfg, model_cfg, dataset_cfg, save_every_round, total_r
             server_round == total_round or server_round % save_every_round == 0
         ):
             # Init model
-            model, tokenizer = get_model(model_cfg)
-            set_parameters(model, parameters)
+            main_model_params, data_influence_model_params = split_models(parameters)
+            set_parameters(self.model, main_model_params)
+            set_parameters_bert(self.data_influence_model, data_influence_model_params)
+            
             tmp_dict = {
                 "prompter": prompter,
                 "seq_length": train_cfg.seq_length,
@@ -294,6 +298,7 @@ def server_fn(context: Context):
         evaluate_fn=get_evaluate_fn(
             cfg.train, cfg.model, cfg.dataset, cfg.train.save_every_round, num_rounds, num_nodes, save_path, cfg.mates
         ),
+        use_mates=cfg.mates.state
     )
     config = ServerConfig(num_rounds=num_rounds)
 

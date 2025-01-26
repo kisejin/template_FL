@@ -50,6 +50,8 @@ model.flash_attention = false
 mates.state = true
 mates.holdout-ratio = 0.001
 mates.reference-ratio = 0.0005
+mates.holdout-batch-size = 4
+mates.reference-batch-size = 2
 mates.update-data-influence-model-step = 20
 mates.selection-fraction = 0.4
 

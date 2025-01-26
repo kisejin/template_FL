@@ -111,7 +111,7 @@ class ManualTrainer:
 
             self.holdout_loader = DataLoader(
                 self.holdout_dataset,
-                batch_size=self.args.per_device_train_batch_size,
+                batch_size=self.mates_args.holdout_batch_size,
                 shuffle=True,
                 collate_fn=self.data_collator,
                 drop_last=self.args.dataloader_drop_last
@@ -119,7 +119,7 @@ class ManualTrainer:
 
             self.reference_loader = DataLoader(
                 self.reference_dataset,
-                batch_size=self.args.per_device_eval_batch_size,
+                batch_size=self.mates_args.reference_batch_size,
                 shuffle=False,
                 collate_fn=self.data_collator,
                 drop_last=self.args.dataloader_drop_last

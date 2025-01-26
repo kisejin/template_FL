@@ -196,9 +196,8 @@ def get_evaluate_fn(train_cfg, model_cfg, dataset_cfg, save_every_round, total_r
             server_round == total_round or server_round % save_every_round == 0
         ):
             # Init model
-            main_model_params, data_influence_model_params = split_models(parameters)
-            set_parameters(self.model, main_model_params)
-            set_parameters_bert(self.data_influence_model, data_influence_model_params)
+            main_model_params, _ = split_models(parameters)
+            set_parameters(model, main_model_params)
             
             tmp_dict = {
                 "prompter": prompter,

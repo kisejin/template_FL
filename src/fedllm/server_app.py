@@ -18,7 +18,7 @@ from flwr.server import ServerApp, ServerAppComponents, ServerConfig
 # from flwr.server.strategy import FedAvg
 from omegaconf import DictConfig
 
-from .models import get_model, get_parameters, set_parameters
+from .models import *
 from .dataset import replace_keys
 from .myfedavg import FedAvg
 from .data_domains import global_test_set_hete

@@ -8,8 +8,22 @@ import inspect
 import logging
 import wandb
 from tqdm import tqdm
+import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
+
+# Wrapper to add dropout to the model's outputs (e.g. logits)
+class ModelWithDropoutWrapper(torch.nn.Module):
+    def __init__(self, model, dropout_p):
+        super().__init__()
+        self.model = model
+        self.dropout = torch.nn.Dropout(dropout_p)
+    def forward(self, *args, **kwargs):
+        outputs = self.model(*args, **kwargs)
+        # If outputs has logits, apply dropout to them
+        if hasattr(outputs, "logits") and outputs.logits is not None:
+            outputs.logits = self.dropout(outputs.logits)
+        return outputs
 
 class ManualLLMSampleCB:
     def __init__(self, model, tokenizer, task, num_samples=10, max_new_tokens=256):
@@ -66,7 +80,8 @@ class ManualLLMSampleCB:
 class ManualTrainer:
     def __init__(
         self, model, tokenizer, train_dataset, val_dataset, holdout_dataset, reference_dataset,
-        args, data_collator, compute_metrics, mates_args, data_influence_model, data_influence_tokenizer
+        args, data_collator, compute_metrics, mates_args, selection_fraction, data_influence_model, 
+        data_influence_tokenizer
     ):
         self.accelerator = Accelerator()
         self.model = model
@@ -75,6 +90,7 @@ class ManualTrainer:
         self.data_collator = data_collator
         self.compute_metrics = compute_metrics
         self.mates_args = mates_args
+        self.selection_fraction = selection_fraction
         self.data_influence_model = data_influence_model
         self.data_influence_tokenizer = data_influence_tokenizer
 
@@ -188,18 +204,21 @@ class ManualTrainer:
 
         for epoch in range(self.args.num_train_epochs):
             # Check if it's time to update the data influence model and state is True
-            if self.mates_args.state and epoch % self.mates_args.update_data_influence_model_step == 0:
-                print("Updating the data influence model and selecting high-quality data...")
-                self.update_data_influence_model()
+            if self.mates_args.state:
+                if epoch % self.mates_args.update_data_influence_model_step == 0:
+                    print("Updating the data influence model and selecting high-quality data...")
+                    self.update_data_influence_model()
 
-            # Filter high-quality data using the data influence model
-            high_quality_indices = self.select_high_quality_data(
-                dataset_size=len(self.train_dataset),
-                selection_fraction=self.mates_args.selection_fraction,
-            )
-            self.train_loader = self.accelerator.prepare(
-                self.create_filtered_dataloader(high_quality_indices)
-            )
+                print(f"Selection fraction: {self.selection_fraction}")
+                # Filter high-quality data using the data influence model
+                high_quality_indices = self.select_high_quality_data(
+                    selection_fraction=self.selection_fraction,
+                )
+                self.train_loader = self.accelerator.prepare(
+                    self.create_filtered_dataloader(high_quality_indices)
+                )
+            else:
+                self.train_loader = self.full_train_loader                
 
             self.model.train()
             epoch_loss = 0.0
@@ -244,7 +263,7 @@ class ManualTrainer:
             
         return {"training_loss": sum(training_loss) / len(training_loss), "best_val_loss": best_val_loss}
 
-    def select_high_quality_data(self, dataset_size, selection_fraction):
+    def select_high_quality_data(self, selection_fraction):
         """
         Use the data influence model to predict quality scores and select high-quality data indices.
         """
@@ -256,7 +275,6 @@ class ManualTrainer:
         influence_optimizer = self.accelerator.prepare(
             torch.optim.AdamW(self.data_influence_model.parameters(), lr=self.args.learning_rate)
         )
-        i = 0
         with torch.no_grad():
             for batch in self.full_train_loader:  # Full dataset loader        
                 text = self.tokenizer.batch_decode(
@@ -281,11 +299,6 @@ class ManualTrainer:
                 )
                 
                 influence_scores.extend(outputs.logits.squeeze(-1).cpu().numpy())
-                
-                i += 1
-                
-                if i == 100:
-                    break
 
         # Normalize influence scores and apply Gumbel-Top-$k$ selection
         influence_scores = np.array(influence_scores)
@@ -319,20 +332,27 @@ class ManualTrainer:
 
 
     def update_data_influence_model(self):
-        # Train a copy of the model on holdout data and validate on reference data
-        copied_model = copy.deepcopy(self.model)
-        copied_model.train()
-        optimizer = self.accelerator.prepare(
-            torch.optim.Adam(copied_model.parameters(), lr=self.args.learning_rate)
-        )
+        # Save the original (untrained) state of self.model.
+        original_state = copy.deepcopy(self.model.state_dict())
         holdout_reference_pairs = []
 
+        torch.cuda.empty_cache()
+
+        # Wrap the model with dropout before training on holdout data.
+        self.model = ModelWithDropoutWrapper(self.model, dropout_p=self.mates_args.copied_model_dropout_rate)
+
         print("Starting to collect holdout-reference pairs...")
+        self.model.train()
+        optimizer = self.accelerator.prepare(
+            torch.optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
+        )
+
         for step, holdout_batch in enumerate(self.holdout_loader):
             print(f"Processing holdout batch {step+1}/{len(self.holdout_loader)}...")
 
             optimizer.zero_grad()
-            outputs = copied_model(
+            # Train on the holdout batch (this updates the wrapped model temporarily)
+            outputs = self.model(
                 input_ids=holdout_batch['input_ids'],
                 attention_mask=holdout_batch['attention_mask'],
                 labels=holdout_batch['labels']
@@ -346,23 +366,27 @@ class ManualTrainer:
             holdout_loss.backward()
             optimizer.step()
 
+            # Use the trained (updated) model to compute reference losses
             print(f"Evaluating reference losses at step {step}...")
-            copied_model.eval()
+            self.model.eval()
             reference_losses = []
 
             with torch.no_grad():
                 for ref_batch in self.reference_loader:
-                    outputs = copied_model(
+                    outputs = self.model(
                         input_ids=ref_batch['input_ids'],
                         attention_mask=ref_batch['attention_mask'],
                         labels=ref_batch['labels']
                     )
                     reference_losses.append(outputs.loss.item())
-            
+
             # Compute the mean of reference losses
             score = sum(reference_losses) / len(reference_losses) if reference_losses else 0.0
             holdout_reference_pairs.append((decoded_texts, score))
-            # copied_model.train()
+            self.model.train()
+
+        # Restore self.model to its original (untrained) state.
+        self.model.load_state_dict(original_state, strict=False)
 
         # Train the data influence model using the generated pairs
         print("Starting to train the data influence model...")

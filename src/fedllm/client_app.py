@@ -204,13 +204,24 @@ class FlowerClient(NumPyClient):
     def fit(
         self, parameters: NDArrays, config: Dict[str, Scalar]
     ) -> Tuple[NDArrays, int, Dict]:
+        selection_fraction = 1.0
         """Implement distributed fit function for a given client."""
         if self.mates_args.state and int(config["current_round"]) != 1:
             main_model_params, data_influence_model_params = split_models(parameters)
             set_parameters(self.model, main_model_params)
             set_parameters_bert(self.data_influence_model, data_influence_model_params)
+
+            # Calculate the optimal number of training tokens based on the Chinchilla scaling law
+            D_opt = self.mates_args.tokens_per_param * len(main_model_params)
+            selection_fraction = D_opt / len(self.trainset)
+            selection_fraction = min(selection_fraction, 1.0)
         else:
             set_parameters(self.model, parameters)
+            
+            # Calculate the optimal number of training tokens based on the Chinchilla scaling law
+            D_opt = self.mates_args.tokens_per_param * len(parameters)
+            selection_fraction = D_opt / len(self.trainset)
+            selection_fraction = min(selection_fraction, 1.0)
 
         new_lr = cosine_annealing(
             int(config["current_round"]),
@@ -260,6 +271,7 @@ class FlowerClient(NumPyClient):
             data_collator=self.data_collator,
             compute_metrics=self.compute_metrics, 
             mates_args=self.mates_args,
+            selection_fraction=selection_fraction,
             data_influence_model=self.data_influence_model,
             data_influence_tokenizer=self.data_influence_tokenizer,
         )
@@ -275,6 +287,8 @@ class FlowerClient(NumPyClient):
         else:
             final_model_params = get_parameters(self.model)
         
+        torch.cuda.empty_cache()
+
         # Calculate FLOPs
         with get_accelerator().device('cuda:0'):
             batch_size = self.training_arguments.per_device_eval_batch_size
@@ -288,7 +302,7 @@ class FlowerClient(NumPyClient):
             flops_value = convert_to_float(flops)
             macs_value = convert_to_float(macs)
             params_value = convert_to_float(params)
-            wandb.log({"total_flops": flops_value, "macs": macs_value, "params": params_value})  # wa
+            wandb.log({"total_flops": flops_value, "macs": macs_value, "params": params_value})
             
         return (
             final_model_params,

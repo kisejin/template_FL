@@ -50,10 +50,11 @@ model.flash_attention = false
 mates.state = true
 mates.holdout-ratio = 0.001
 mates.reference-ratio = 0.0005
-mates.holdout-batch-size = 4
+mates.holdout-batch-size = 2
 mates.reference-batch-size = 2
 mates.update-data-influence-model-step = 20
-mates.selection-fraction = 0.4
+mates.tokens_per_param = 20
+mates.copied_model_dropout_rate = 0.3
 
 # Define LoRA settings
 model.lora.lora-r = 8 
@@ -69,6 +70,7 @@ train.seq-length = 256
 train.prompt_template_name = "alpaca"
 train.train_on_inputs = true
 train.verbose = false
+train.early_stopping_patience = 5
 
 # Define training agruments for HF Trainer
 train.training-arguments.output-dir = "" 
@@ -105,4 +107,4 @@ default = "local-simulation"
 [tool.flwr.federations.local-simulation]
 options.num-supernodes = 10
 options.backend.client-resources.num-cpus = 8
-options.backend.client-resources.num-gpus = 1.0
+options.backend.client-resources.num-gpus = 2.0

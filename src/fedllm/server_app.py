@@ -158,6 +158,7 @@ def test_model(dataset, model, tokenizer, train_cfg, tmp_dict, sround, mates_arg
         data_collator=data_collator,
         compute_metrics=compute_metrics, 
         mates_args=mates_args,
+        selection_fraction=1.0,
         data_influence_model=None,
         data_influence_tokenizer=None,
     )

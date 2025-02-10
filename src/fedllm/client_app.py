@@ -5,6 +5,7 @@ import warnings
 from typing import Dict, Tuple
 
 import torch
+import logging
 import wandb
 import numpy as np
 from flwr.client import ClientApp, NumPyClient
@@ -13,7 +14,15 @@ from flwr.common.config import unflatten_dict
 from flwr.common.typing import NDArrays, Scalar
 from omegaconf import DictConfig
 
-from transformers import TrainingArguments, DataCollatorForSeq2Seq, Trainer, EarlyStoppingCallback, BertForSequenceClassification, GenerationConfig
+
+from transformers import (
+    TrainingArguments, 
+    DataCollatorForSeq2Seq, 
+    Trainer, 
+    EarlyStoppingCallback, 
+    # BertForSequenceClassification,
+    GenerationConfig
+)
 
 from trl import SFTTrainer, SFTConfig
 from deepspeed.profiling.flops_profiler import get_model_profile
@@ -39,6 +48,10 @@ from .make_data import Prompter, generate_and_tokenize_prompt
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 os.environ["RAY_DISABLE_DOCKER_CPU_WARNING"] = "1"
 warnings.filterwarnings("ignore", category=UserWarning)
+
+
+logging.getLogger("flwr").setLevel(logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 def input_constructor(batch_size, seq_len, tokenizer):
@@ -81,6 +94,7 @@ class FlowerClient(NumPyClient):
         model_cfg: DictConfig,
         train_cfg: DictConfig,
         mates_args: DictConfig,
+        skipbert_args: DictConfig,
         trainset,
         valset,
         num_rounds,
@@ -95,16 +109,18 @@ class FlowerClient(NumPyClient):
         self.trainset = trainset
         self.valset = valset
         self.mates_args = mates_args
+        self.skipbert_args = skipbert_args
         self.holdoutset = None
         self.refset = None
-        self.data_influence_model = None
+        self.teacher_data_influence_model = None
+        self.student_data_influence_model = None
         self.data_influence_tokenizer = None
 
         # instantiate model
         self.model, self.tokenizer = get_model(model_cfg)
         
         if self.mates_args.state:
-            self.data_influence_model, self.data_influence_tokenizer = get_data_influence_model(model_cfg)      
+            self.teacher_data_influence_model, self.student_data_influence_model ,self.data_influence_tokenizer = get_data_influence_model(model_cfg, skipbert_args)     
         
         # (
         #     self.data_collator, 
@@ -165,6 +181,7 @@ class FlowerClient(NumPyClient):
             .map(
                 lambda x: generate_and_tokenize_prompt(x, **tmp_dict),
                 num_proc=8,
+                remove_columns=['instruction', 'input', 'output']
             )
         )
 
@@ -175,6 +192,7 @@ class FlowerClient(NumPyClient):
             .map(
                 lambda x: generate_and_tokenize_prompt(x, **tmp_dict),
                 num_proc=8,
+                remove_columns=['instruction', 'input', 'output']
             )
         )
 
@@ -206,16 +224,25 @@ class FlowerClient(NumPyClient):
     ) -> Tuple[NDArrays, int, Dict]:
         selection_fraction = 1.0
         """Implement distributed fit function for a given client."""
+        
         if self.mates_args.state and int(config["current_round"]) != 1:
             main_model_params, data_influence_model_params = split_models(parameters)
             set_parameters(self.model, main_model_params)
-            set_parameters_bert(self.data_influence_model, data_influence_model_params)
+            set_parameters_bert(self.teacher_data_influence_model, data_influence_model_params)
 
             # Compute the total number of tokens in the training set.
-            total_tokens = sum(len(sample.split()) for sample in self.trainset)  # adjust tokenizer if needed
+            # print(self.tokenizer.decode(self.trainset[0]['input_ids'], skip_special_tokens = True))
+            total_tokens = sum(
+                len(
+                    f"{self.tokenizer.decode(sample['input_ids'], skip_special_tokens = True)}".split()
+                ) 
+                for sample in self.trainset
+            )  # adjust tokenizer if needed
 
             # Compute the total number of parameters in the main model.
-            main_model_param_count = sum(param.numel() for param in main_model_params)
+            # main_model_param_count = sum(param.numel() for param in main_model_params) # Pytorch params
+            main_model_param_count = sum(param.size for param in main_model_params) # Numpy params
+            print(f"Total tokens: {total_tokens}, Total params: {main_model_param_count}\n")
 
             # Calculate the optimal number of training tokens based on the Chinchilla scaling law.
             D_opt = self.mates_args.tokens_per_param * main_model_param_count
@@ -277,9 +304,12 @@ class FlowerClient(NumPyClient):
             data_collator=self.data_collator,
             compute_metrics=self.compute_metrics, 
             mates_args=self.mates_args,
+            skipbert_args=self.skipbert_args,
             selection_fraction=selection_fraction,
-            data_influence_model=self.data_influence_model,
+            teacher_data_influence_model=self.teacher_data_influence_model,
+            student_data_influence_model=self.student_data_influence_model,
             data_influence_tokenizer=self.data_influence_tokenizer,
+            task='text-generation',
         )
 
         # Train the model
@@ -288,7 +318,7 @@ class FlowerClient(NumPyClient):
         if self.mates_args.state:
             # After training
             main_model_params = get_parameters(self.model)
-            data_influence_model_params = model_parameters_to_ndarrays(self.data_influence_model)
+            data_influence_model_params = model_parameters_to_ndarrays(self.teacher_data_influence_model)
             final_model_params = concatenate_models_with_marker(main_model_params, data_influence_model_params)
         else:
             final_model_params = get_parameters(self.model)
@@ -299,21 +329,31 @@ class FlowerClient(NumPyClient):
         # with get_accelerator().device('cuda:0'):
         batch_size = self.training_arguments.per_device_eval_batch_size
         seq_len = self.train_cfg.seq_length
-        flops, macs, params = get_model_profile(
-            self.model,
-            kwargs=input_constructor(batch_size, seq_len, self.tokenizer),
-            print_profile=True,
-            detailed=False,
+
+        flops1, macs1, params1 = get_model_profile(
+          self.model,
+          kwargs=input_constructor(batch_size, seq_len, self.tokenizer),
+          print_profile=True,
+          detailed=False,
         )
-        flops_value = convert_to_float(flops)
-        macs_value = convert_to_float(macs)
-        params_value = convert_to_float(params)
-        wandb.log({"total_flops": flops_value, "macs": macs_value, "params": params_value})
+
+        flops2, macs2, params2 = get_model_profile(
+          self.teacher_data_influence_model,
+          kwargs=input_constructor(batch_size, seq_len, self.data_influence_tokenizer),
+          print_profile=True,
+          detailed=False,
+        )
+
+        flops1_value, flops2_value = convert_to_float(flops1), convert_to_float(flops2)
+        macs1_value, macs2_value = convert_to_float(macs1), convert_to_float(macs2)
+        params1_value, params2_value  = convert_to_float(params1), convert_to_float(params2)
+
+        wandb.log({"total_flops": flops1_value + flops2_value, "macs": macs1_value + macs2_value, "params": params1_value + params2_value})
             
         return (
             final_model_params,
             len(self.trainset),
-            {"train_loss": results['training_loss'], "flops": flops_value},
+            {"train_loss": results['training_loss'], "flops": flops1_value + flops2_value},
         )
 
 
@@ -329,11 +369,15 @@ def client_fn(context: Context) -> FlowerClient:
         client_set = load_data_homo(partition_id, num_partitions, cfg.dataset.name)
     else:
         client_set = load_data_hete(partition_id)
+        
+    cfg.skipbert.att_layer_maps = [int(s) for s in cfg.skipbert.att_layer_maps.split(', ')]
+    cfg.skipbert.hid_layer_maps = [int(k) for k in cfg.skipbert.hid_layer_maps.split(', ')]
 
     return FlowerClient(
         cfg.model,
         cfg.train,
         cfg.mates,
+        cfg.skipbert,
         client_set['train'],
         client_set['test'],
         num_rounds,

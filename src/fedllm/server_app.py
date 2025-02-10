@@ -1,9 +1,11 @@
 """flowertune-llm: A Flower / FlowerTune app."""
 
 import os
+import sys
 import torch
 import wandb
 import numpy as np
+import pandas as pd
 from dotenv import load_dotenv
 from datetime import datetime
 from tqdm import tqdm
@@ -12,9 +14,12 @@ from transformers import DataCollatorForSeq2Seq, DataCollatorWithPadding, Traini
 from .trainer import ManualTrainer
 from transformers.integrations import WandbCallback
 from torch.utils.data import DataLoader
+
+import flwr
 from flwr.common import Context, ndarrays_to_parameters
 from flwr.common.config import unflatten_dict
 from flwr.server import ServerApp, ServerAppComponents, ServerConfig
+from flwr.common.logger import FLOWER_LOGGER
 # from flwr.server.strategy import FedAvg
 from omegaconf import DictConfig
 
@@ -29,12 +34,101 @@ from datasets import load_dataset, Dataset
 from sklearn.model_selection import train_test_split
 
 
+import logging
+import uuid
+
+
+logging.getLogger("flwr").setLevel(logging.INFO)
+logging.getLogger("Trainer").setLevel(logging.INFO)
+
 load_dotenv(".env")
 
 os.environ["WANDB_API_KEY"] = os.getenv("WANDB_API_KEY")
 os.environ["WANDB_NAME"] = os.getenv("WANDB_NAME")
 os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN")
 # os.environ["WANDB_LOG_MODEL"] = "checkpoint"
+
+
+class SessionIDFilter(logging.Filter):
+
+    """Adds a session_id to log records."""
+    
+    def __init__(self, session_id):
+        super().__init__()
+        self.session_id = session_id
+
+    def filter(self, record):
+        record.session_id = self.session_id
+        return True
+
+
+def configure_logging():
+
+    # Generate a unique session ID for this run
+    session_id = str(uuid.uuid4())
+
+    # Define log format with session ID and process ID
+    log_format = (
+        "%(asctime)s - %(session_id)s - %(process)d - %(name)s - "
+        "%(levelname)s - %(message)s"
+    )
+
+    # Create a FileHandler and attach the SessionIDFilter to it
+    file_handler = logging.FileHandler("main.log", mode='a')  # Append mode
+    formatter = logging.Formatter(log_format)
+    file_handler.setFormatter(formatter)
+    file_handler.addFilter(SessionIDFilter(session_id))  # Add filter to the handler
+
+
+    # Console handler: logs to stdout (you can also log to stderr)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.DEBUG)
+    console_handler.setFormatter(formatter)
+
+    # Configure root logger to use this handler
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[
+            file_handler,
+            console_handler,
+        ],  # Use the filtered handler
+    )
+
+    
+
+    # if not any(
+    #     isinstance(handler, logging.FileHandler) and handler.baseFilename == file_handler.baseFilename
+    #     for handler in FLOWER_LOGGER.handlers
+    # ):
+    #     FLOWER_LOGGER.addHandler(file_handler)
+
+
+    for handler in FLOWER_LOGGER.handlers:
+        FLOWER_LOGGER.addHandler(file_handler)
+
+    # Get the logger for the ClientAppActor module and attach the same file handler
+    client_actor_logger = logging.getLogger("flwr.simulation.ray_transport.ray_actor")
+
+    # if not any(
+    #     isinstance(handler, logging.FileHandler) and handler.baseFilename == file_handler.baseFilename
+    #     for handler in client_actor_logger.handlers
+    # ):
+    #     client_actor_logger.addHandler(file_handler)
+
+
+    for handler in client_actor_logger.handlers:
+        client_actor_logger.addHandler(file_handler)
+
+    # Explicitly configure Ray's logger to propagate
+    ray_logger = logging.getLogger("ray")  # Ray's parent logger
+
+    for handler in ray_logger.handlers:
+        ray_logger.addHandler(file_handler)
+
+    # Log the start of the session
+    logger = logging.getLogger(__name__)
+    logger.info("===== Application Started =====")
+
 
 class LLMSampleCB(WandbCallback):
     def __init__(self, trainer, test_dataset, task, num_samples=10, max_new_tokens=256, log_model="checkpoint"):
@@ -84,7 +178,7 @@ class LLMSampleCB(WandbCallback):
 
 
 
-def test_model(dataset, model, tokenizer, train_cfg, tmp_dict, sround, mates_args, task):
+def test_model(dataset, model, tokenizer, train_cfg, tmp_dict, sround, mates_args, skipbert_args, task):
     
     wandb.init(
         project='FL@CSS25',
@@ -158,9 +252,12 @@ def test_model(dataset, model, tokenizer, train_cfg, tmp_dict, sround, mates_arg
         data_collator=data_collator,
         compute_metrics=compute_metrics, 
         mates_args=mates_args,
+        skipbert_args=skipbert_args,
         selection_fraction=1.0,
-        data_influence_model=None,
+        teacher_data_influence_model=None,
+        student_data_influence_model=None,
         data_influence_tokenizer=None,
+        task=task
     )
     
     # Do local training
@@ -186,7 +283,7 @@ def test_model(dataset, model, tokenizer, train_cfg, tmp_dict, sround, mates_arg
 # Get function that will be executed by the strategy's evaluate() method
 # Here we use it to save global model checkpoints
 
-def get_evaluate_fn(train_cfg, model_cfg, dataset_cfg, save_every_round, total_round, total_nodes, save_path, mates_args):
+def get_evaluate_fn(train_cfg, model_cfg, dataset_cfg, save_every_round, total_round, total_nodes, save_path, mates_args, skipbert_args):
     """Return an evaluation function for saving global model."""
 
     def evaluate(server_round: int, parameters, config):
@@ -209,12 +306,14 @@ def get_evaluate_fn(train_cfg, model_cfg, dataset_cfg, save_every_round, total_r
             }
             if dataset_cfg.type == 'homo':
                 ds = load_dataset(dataset_cfg.name)
+                option = 'test' if 'test' in ds else 'train'
+                df = pd.DataFrame(ds[option])
                 _, test = train_test_split(
-                    ds, test_size=0.09, shuffle=True, random_state=42
+                    df, test_size=0.09, shuffle=True, random_state=42
                 )
                 global_test_set_homo = Dataset.from_pandas(test).remove_columns(['__index_level_0__'])
                 
-                loss, metrics = test_model(global_test_set_homo, model, tokenizer, train_cfg, tmp_dict, server_round, mates_args, 'homo')
+                loss, metrics = test_model(global_test_set_homo, model, tokenizer, train_cfg, tmp_dict, server_round, mates_args, skipbert_args, 'homo')
                 total_loss = loss
                 result_metric = {'homo_f1': metrics['homo_f1']}
             else:
@@ -226,7 +325,7 @@ def get_evaluate_fn(train_cfg, model_cfg, dataset_cfg, save_every_round, total_r
                 
                 for task in ['general', 'finance', 'math', 'medical', 'code']:
                     ds = global_test_set_hete[task]
-                    loss, metrics = test_model(ds, model, tokenizer, train_cfg, tmp_dict, server_round, mates_args, task)
+                    loss, metrics = test_model(ds, model, tokenizer, train_cfg, tmp_dict, server_round, mates_args, skipbert_args, task)
                     list_loss.append(loss)
                     
                     list_f1[f'{task}_f1'] = metrics[f'{task}_f1']
@@ -273,6 +372,10 @@ def fit_weighted_average(metrics):
 
 def server_fn(context: Context):
     """Construct components that set the ServerApp behaviour."""
+    
+    configure_logging()
+    logger = logging.getLogger(__name__)
+    
     # Create output directory given current timestamp
     current_time = datetime.now()
     folder_name = current_time.strftime("%Y-%m-%d_%H-%M-%S")
@@ -297,7 +400,7 @@ def server_fn(context: Context):
         fit_metrics_aggregation_fn=fit_weighted_average,
         initial_parameters=init_model_parameters,
         evaluate_fn=get_evaluate_fn(
-            cfg.train, cfg.model, cfg.dataset, cfg.train.save_every_round, num_rounds, num_nodes, save_path, cfg.mates
+            cfg.train, cfg.model, cfg.dataset, cfg.train.save_every_round, num_rounds, num_nodes, save_path, cfg.mates, cfg.skipbert
         ),
         use_mates=cfg.mates.state
     )

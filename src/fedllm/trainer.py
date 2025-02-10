@@ -3,11 +3,28 @@ from torch.utils.data import DataLoader
 import torch
 import copy
 import numpy as np
-from transformers import BertForSequenceClassification, GenerationConfig, AutoTokenizer
+
+
+from transformers import (
+    # BertForSequenceClassification, 
+    GenerationConfig, 
+    AutoTokenizer,
+    Trainer,
+    get_scheduler, 
+    EarlyStoppingCallback,
+    TrainingArguments,
+    DataCollatorWithPadding
+)
+from datasets import Dataset
+from .skipbert.trainer import compute_metrics_skipbert, SkipBertTrainer
+
 import inspect
 import logging
 import wandb
+import time
 from tqdm import tqdm
+
+from functools import partial
 import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
@@ -24,6 +41,24 @@ class ModelWithDropoutWrapper(torch.nn.Module):
         if hasattr(outputs, "logits") and outputs.logits is not None:
             outputs.logits = self.dropout(outputs.logits)
         return outputs
+    
+def time_format(runtime, logger):
+
+    if runtime < 60:
+        logger.info(f'Runtime: {runtime:.2f} seconds')
+    elif runtime < 3600:  # Less than one hour
+        minutes = runtime / 60
+        logger.info(f'Runtime: {minutes:.2f} minutes')
+    else:
+        hours = runtime / 3600
+        logger.info(f'Runtime: {hours:.2f} hours')
+
+        
+def convert_to_tokens_reg(data, tokenizer, max_seq_length, device):
+    input_tokenzied = tokenizer(data['text'], truncation=True, padding=True, max_length=max_seq_length, return_tensors="pt")
+    input_tokenzied['labels'] = torch.tensor(data['label'], dtype=torch.float32).reshape(-1, 1)
+
+    return input_tokenzied
 
 class ManualLLMSampleCB:
     def __init__(self, model, tokenizer, task, num_samples=10, max_new_tokens=256):
@@ -57,17 +92,25 @@ class ManualLLMSampleCB:
         table = wandb.Table(columns=["input", "prediction", "label", "task"])
         sampled_dataset = dataset.shuffle(seed=42).select(range(self.num_samples))
 
-        for example in tqdm(sampled_dataset, desc="Generating Samples"):
+        for example in tqdm(sampled_dataset, 
+                            desc="Generating Samples",
+                           bar_format='{l_bar}{bar} {percentage:3.0f}% | {n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
+            
             instruction = example.get("instruction", "")
             input_text = example.get("input", "")
             label = example.get("output", "")
 
             if input_text:
-                prompt = f"Instruction: {instruction} Input: {input_text} Response:"
+                prompt = f"{instruction} \n {input_text}"
             else:
-                prompt = f"Instruction: {instruction} Response:"
+                prompt = f"{instruction}"
 
+                
+            prompt = prompt.split("### Response:")[0] + "\n### Response:"
             prediction = self.generate(prompt)
+            prediction = prediction.split("### Response:")[-1]
+            label = label.split("### Response:")[-1]
+            
             table.add_data(prompt, prediction, label, self.task)
         
         return table
@@ -79,9 +122,12 @@ class ManualLLMSampleCB:
 
 class ManualTrainer:
     def __init__(
-        self, model, tokenizer, train_dataset, val_dataset, holdout_dataset, reference_dataset,
-        args, data_collator, compute_metrics, mates_args, selection_fraction, data_influence_model, 
-        data_influence_tokenizer
+        self, model, tokenizer, 
+        train_dataset, val_dataset, holdout_dataset, reference_dataset,
+        args, data_collator, compute_metrics, mates_args, skipbert_args, 
+        selection_fraction, 
+        teacher_data_influence_model, student_data_influence_model, 
+        data_influence_tokenizer,task
     ):
         self.accelerator = Accelerator()
         self.model = model
@@ -90,9 +136,12 @@ class ManualTrainer:
         self.data_collator = data_collator
         self.compute_metrics = compute_metrics
         self.mates_args = mates_args
+        self.skipbert_args = skipbert_args
         self.selection_fraction = selection_fraction
-        self.data_influence_model = data_influence_model
+        self.teacher_data_influence_model = teacher_data_influence_model
+        self.student_data_influence_model = student_data_influence_model
         self.data_influence_tokenizer = data_influence_tokenizer
+        self.task = task
 
         # Remove unused columns from datasets
         if train_dataset:
@@ -120,7 +169,8 @@ class ManualTrainer:
             )
         else:
             self.val_loader = None
-
+        
+        
         if self.mates_args.state:
             self.holdout_dataset = self._remove_unused_columns(holdout_dataset, "holdout")
             self.reference_dataset = self._remove_unused_columns(reference_dataset, "reference")
@@ -151,12 +201,62 @@ class ManualTrainer:
         self.model, self.optimizer, self.full_train_loader, self.val_loader = self.accelerator.prepare(
             self.model, self.optimizer, self.full_train_loader, self.val_loader
         )
-
+        
+        ### Define for MATEs ###
         if self.mates_args.state:
             # Prepare holdout and reference loaders for Accelerator
-            self.data_influence_model, self.holdout_loader, self.reference_loader = self.accelerator.prepare(
-                self.data_influence_model, self.holdout_loader, self.reference_loader
+            self.teacher_data_influence_model, self.holdout_loader, self.reference_loader = self.accelerator.prepare(
+                self.teacher_data_influence_model, self.holdout_loader, self.reference_loader
             )
+            
+            self.student_data_influence_model = self.accelerator.prepare(self.student_data_influence_model)
+            ######
+        
+        ### Define for SkipBERT ###
+
+        self.skipbert_train_args = TrainingArguments(
+            output_dir=self.skipbert_args.output_dir,
+            learning_rate=self.skipbert_args.learning_rate,
+            num_train_epochs=self.skipbert_args.num_train_epochs,
+            per_device_train_batch_size=self.skipbert_args.train_batch_size,
+            gradient_accumulation_steps=self.skipbert_args.gradient_accumulation_steps,
+            per_device_eval_batch_size=self.skipbert_args.eval_batch_size,
+            eval_accumulation_steps=self.skipbert_args.eval_accumulation_steps,
+            max_steps=self.skipbert_args.max_steps,
+            logging_steps = 10,
+            evaluation_strategy=self.skipbert_args.evaluation_strategy,
+            save_strategy=self.skipbert_args.save_strategy,
+            lr_scheduler_type=self.skipbert_args.lr_scheduler_type,
+            warmup_steps=self.skipbert_args.warmup_steps,
+            weight_decay=self.skipbert_args.weight_decay,
+            logging_dir=self.skipbert_args.logging_dir,
+            report_to='wandb',
+            run_name='skipbert',
+            do_train=self.skipbert_args.do_train,
+            do_eval=self.skipbert_args.do_eval,
+            dataloader_drop_last=False,
+            ddp_find_unused_parameters=False,
+            group_by_length=True,
+            load_best_model_at_end = True
+        )
+
+        
+
+        # Prepare custom optimizer student model's parameters
+        if self.student_data_influence_model is not None:
+            no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
+            self.student_optimizer_grouped_parameters = [
+                {
+                    'params': [p for n, p in self.student_data_influence_model.named_parameters() if not any(nd in n for nd in no_decay)], 
+                    'weight_decay': 0.01
+                },
+                {
+                    'params': [p for n, p in self.student_data_influence_model.named_parameters() if any(nd in n for nd in no_decay)], 
+                    'weight_decay': 0.0
+                }
+            ]
+
+        ######
 
     def _remove_unused_columns(self, dataset, description=None):
         """
@@ -202,7 +302,8 @@ class ManualTrainer:
         early_stopping_patience = 5
         training_loss = []
 
-        for epoch in range(self.args.num_train_epochs):
+        for epoch in tqdm(range(self.args.num_train_epochs), 
+                          bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
             # Check if it's time to update the data influence model and state is True
             if self.mates_args.state:
                 if epoch % self.mates_args.update_data_influence_model_step == 0:
@@ -223,7 +324,8 @@ class ManualTrainer:
             self.model.train()
             epoch_loss = 0.0
 
-            for step, batch in enumerate(self.train_loader):
+            for step, batch in tqdm(enumerate(self.train_loader),
+                                    bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
                 if step >= self.args.max_steps:
                     break
 
@@ -271,12 +373,18 @@ class ManualTrainer:
 
         # Predict influence scores for the entire dataset
         influence_scores = []
-        self.data_influence_model.eval()
+        self.student_data_influence_model.eval()
         influence_optimizer = self.accelerator.prepare(
-            torch.optim.AdamW(self.data_influence_model.parameters(), lr=self.args.learning_rate)
+            torch.optim.AdamW(
+                self.student_optimizer_grouped_parameters, 
+                lr=self.args.learning_rate)
         )
+        
+        start_time = time.perf_counter()
+        
         with torch.no_grad():
-            for batch in self.full_train_loader:  # Full dataset loader        
+            for batch in tqdm(self.full_train_loader, 
+                           bar_format='{l_bar}{bar} {percentage:3.0f}% | {n_fmt}/{total_fmt} [{elapsed}<{remaining}]'): # Full dataset loader        
                 text = self.tokenizer.batch_decode(
                     batch['input_ids'], 
                     skip_special_tokens=True
@@ -293,12 +401,12 @@ class ManualTrainer:
 
                 # Train the data influence model
                 influence_optimizer.zero_grad()
-                outputs = self.data_influence_model(
+                logits, attn_outputs, hidn_output = self.student_data_influence_model(
                     input_ids=bert_inputs['input_ids'],
                     attention_mask=bert_inputs['attention_mask'],
                 )
                 
-                influence_scores.extend(outputs.logits.squeeze(-1).cpu().numpy())
+                influence_scores.extend(logits.squeeze(-1).cpu().numpy())
 
         # Normalize influence scores and apply Gumbel-Top-$k$ selection
         influence_scores = np.array(influence_scores)
@@ -310,9 +418,17 @@ class ManualTrainer:
         influence_scores += gumbel_noise
 
         # Select top indices based on influence scores
+        print(f"Selection fraction: {selection_fraction}")
         selection_size = int(len(influence_scores)*selection_fraction)
+        print(f"List influence score: {influence_scores}, length: {len(influence_scores)}")
+        print(f"Selection size: {selection_size}")
+        selection_size = selection_size if len(influence_scores) != selection_size else selection_size - 1
         high_quality_indices = np.argpartition(-influence_scores, selection_size)[:selection_size]
         print(f"Selected {len(high_quality_indices)} high-quality samples.")
+        
+        end_time = time.perf_counter()
+        runtime = round((end_time - start_time), 2)
+        time_format(runtime, logger)
 
         return high_quality_indices
 
@@ -343,11 +459,16 @@ class ManualTrainer:
 
         print("Starting to collect holdout-reference pairs...")
         self.model.train()
+        
+        self.accelerator.state._reset_state()
+        self.accelerator = Accelerator()
+        
         optimizer = self.accelerator.prepare(
             torch.optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
         )
 
-        for step, holdout_batch in enumerate(self.holdout_loader):
+        for step, holdout_batch in tqdm(enumerate(self.holdout_loader),
+                                        bar_format='{l_bar}{bar} {percentage:3.0f}% | {n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
             print(f"Processing holdout batch {step+1}/{len(self.holdout_loader)}...")
 
             optimizer.zero_grad()
@@ -386,43 +507,152 @@ class ManualTrainer:
             self.model.train()
 
         # Restore self.model to its original (untrained) state.
+        self.model = self.model.model
         self.model.load_state_dict(original_state, strict=False)
 
         # Train the data influence model using the generated pairs
         print("Starting to train the data influence model...")
-        self.data_influence_model.train()
-        influence_optimizer = torch.optim.AdamW(self.data_influence_model.parameters(), lr=self.args.learning_rate)
+        self.teacher_data_influence_model.train()
+        influence_optimizer = torch.optim.AdamW(self.teacher_data_influence_model.parameters(), lr=self.args.learning_rate)
+        
+        # Convert to HF datasets
+        list_texts, list_score = [], []
+        batch_size = 0
 
-        for step, (text, score) in enumerate(holdout_reference_pairs):
-            # Tokenize the text using the BERT tokenizer
-            bert_inputs = self.data_influence_tokenizer(
-                text,
-                truncation=True,
-                padding='max_length',
-                max_length=256,
-                return_tensors='pt'
-            ).to(self.accelerator.device)
+        # Convert to Dataset objective
+        for texts, score in holdout_reference_pairs:
+            if batch_size == 0:
+                batch_size = len(texts)
+            list_texts.extend(texts)
+            list_score.extend([score] * len(texts))
+
+        holdout_reference_pairs = {'text': list_texts, 'label': list_score}
+        holdout_reference_pairs = Dataset.from_dict(holdout_reference_pairs)
+
+        
+
+        # Wrap the function with partial
+        convert_func = partial(
+            convert_to_tokens_reg,
+            tokenizer=self.data_influence_tokenizer,
+            max_seq_length=self.skipbert_args.max_seq_length,
+            device=self.accelerator.device
+        )
+
+        holdout_reference_pairs_loader = DataLoader(
+            holdout_reference_pairs.map(
+                convert_func,
+                batched=True,
+                num_proc=8,
+                remove_columns=holdout_reference_pairs.column_names
+            ), 
+            batch_size=batch_size,
+            collate_fn=DataCollatorWithPadding(tokenizer=self.data_influence_tokenizer, padding=True, max_length=self.skipbert_args.max_seq_length),  # Use the same collate function
+            drop_last=self.args.dataloader_drop_last
+        )
+        
+        for step, batch_input in tqdm(
+                                    enumerate(holdout_reference_pairs_loader),
+                                    bar_format='{l_bar}{bar} {percentage:3.0f}% | {n_fmt}/{total_fmt} [{elapsed}<{remaining}]'
+                                ):      # Tokenize the text using the BERT tokenizer
+            
+            batch_input = {k: v.to('cuda') for k, v in batch_input.items()} # cuda:0
+            # bert_inputs = self.data_influence_tokenizer(
+            #     text,
+            #     truncation=True,
+            #     padding='max_length',
+            #     max_length=256,
+            #     return_tensors='pt'
+            # ).to(self.accelerator.device)
+            
 
             # Convert score to tensor and enable gradients
-            score_tensor = torch.tensor([score], device=self.accelerator.device, dtype=torch.float32, requires_grad=True)
+            # score_tensor = torch.tensor([score], device=self.accelerator.device, dtype=torch.float32, requires_grad=True)
             
             # Train the data influence model
             influence_optimizer.zero_grad()
-            outputs = self.data_influence_model(
-                input_ids=bert_inputs['input_ids'],
-                attention_mask=bert_inputs['attention_mask'],
-                labels=score_tensor
+            outputs = self.teacher_data_influence_model(
+                # **batch_input
+                input_ids=batch_input['input_ids'],
+                attention_mask=batch_input['attention_mask'],
+                labels=batch_input['labels'].view(-1)
             )
-            influence_loss = outputs.loss
 
-            influence_loss.backward()
+            # influence_loss = loss_mse(batch_input['labels'].view(-1), outputs.logits.view(-1))
+            # print(f"Loss: {influence_loss} - require_grad: {influence_loss.grad_fn}")
+
+            influence_loss = outputs.loss
+            influence_loss.requires_grad = True
+            self.accelerator.backward(influence_loss)
             influence_optimizer.step()
 
             if step % 50 == 0:
                 print(f"[Influence Training] Step {step}: Loss = {influence_loss.item():.4f}")
+            
+        
+        ### Distillation for SkipBERT ###
+        train_converted = holdout_reference_pairs.map(
+            convert_func,
+            batched=True,
+            num_proc=8,
+            remove_columns=holdout_reference_pairs.column_names
+        )
+
+        
+        # Call parent constructor with custom optimizer
+        optimizer = torch.optim.AdamW(
+            self.student_optimizer_grouped_parameters, 
+            lr=self.skipbert_train_args.learning_rate,
+        )
+
+        scheduler = get_scheduler(
+            name=self.skipbert_train_args.lr_scheduler_type,
+            optimizer=optimizer,
+            num_warmup_steps=self.skipbert_train_args.warmup_steps,
+            # num_training_steps=training_args.max_steps
+            num_training_steps=100/(self.skipbert_train_args.per_device_train_batch_size * self.skipbert_train_args.gradient_accumulation_steps)
+
+        )
 
 
-    def evaluate(self, wandb_sample=False):
+        # Initialize the trainer
+        trainer = SkipBertTrainer(
+            student_model=self.student_data_influence_model,
+            teacher_model=self.teacher_data_influence_model,
+            args=self.skipbert_train_args,
+            train_dataset=train_converted,
+            eval_dataset=train_converted.shuffle().select(range(min(len(train_converted),10))),
+
+            compute_metrics=compute_metrics_skipbert,
+            # SkipBERT specific arguments
+            alpha=0.5,
+            temperature=2.0,
+            beta=1.0,
+            use_logits=self.skipbert_args.use_logits,
+            use_att=self.skipbert_args.use_att,
+            use_rep=self.skipbert_args.use_rep,
+            use_embedding=self.skipbert_args.use_embedding,
+            att_layer_maps=self.skipbert_args.att_layer_maps,
+            hid_layer_maps=self.skipbert_args.hid_layer_maps,
+            epochs_no_cls=self.skipbert_args.epochs_no_cls,
+            reduce_T=self.skipbert_args.reduce_T,
+            output_mode=self.skipbert_args.output_mode, # 'classification' or 'regression'
+            num_masked_layers_teacher=self.skipbert_args.num_masked_layers_teacher,
+            num_masked_last_layers_teacher=self.skipbert_args.num_masked_last_layers_teacher,
+            fp16=self.skipbert_args.fp16,
+            num_full_hidden_layers_student=self.skipbert_args.num_full_hidden_layers_student,
+            tokenizer=self.data_influence_tokenizer,
+            optimizers=(optimizer,scheduler),
+            callbacks=[EarlyStoppingCallback(early_stopping_patience=5)]
+
+        )
+
+        # Train the model
+        print(f"### KD student data influence model ###")
+        trainer.train()
+
+
+    def evaluate(self, wandb_sample=True):
         self.model.eval()
         val_loss = 0.0
 
@@ -469,18 +699,27 @@ class ManualTrainer:
         metrics = self.compute_metrics({"predictions": padded_preds, "label_ids": padded_labels})
 
         metrics.update({"eval_loss": val_loss / len(self.val_loader)})
-        print("Validation Metrics:", metrics)
+        print(f"Validation Metrics: {metrics}")
 
         if wandb_sample:
             # Sample Logging
+            instruction = self.tokenizer.batch_decode(self.val_dataset['input_ids'])
+            output = self.tokenizer.batch_decode(self.val_dataset['labels'])
+            valid_ds = {
+                'instruction': instruction,
+                'output': output
+            }
+
+            valid_ds = Dataset.from_dict(valid_ds)
+            
             llm_sample_cb = ManualLLMSampleCB(
                 model=self.model,
                 tokenizer=self.tokenizer,
-                task="classification",
+                task=self.task,
                 num_samples=5,
                 max_new_tokens=128
             )
-            llm_sample_cb.log_samples_to_wandb(self.val_dataset)
+            llm_sample_cb.log_samples_to_wandb(valid_ds)
 
         return metrics
 

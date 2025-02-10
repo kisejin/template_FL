@@ -11,7 +11,17 @@ from peft import (
     set_peft_model_state_dict,
 )
 from peft.utils import prepare_model_for_kbit_training
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainerCallback, BertForSequenceClassification
+
+from transformers import (
+    AutoModelForCausalLM, 
+    AutoTokenizer, 
+    BitsAndBytesConfig, 
+    TrainerCallback, 
+    # BertForSequenceClassification,
+    BertConfig,
+)
+
+from .skipbert.modeling import BertForSequenceClassification, SkipBertForSequenceClassification
 
 from flwr.common.typing import NDArrays
 from transformers.trainer_callback import TrainerControl, TrainerState
@@ -90,24 +100,86 @@ def get_model(model_cfg: DictConfig):
 
     return get_peft_model(model, peft_config), tokenizer
 
-def get_data_influence_model(model_cfg: DictConfig):
+
+
+def get_custom_config(teacher_name, skipbert_args: DictConfig):
+
+    num_labels = 1 # Set number of labels to 1 for regression or single-class tasks
+    teacher_config = BertConfig.from_pretrained(teacher_name)
+    teacher_config.num_labels = num_labels
+    teacher_config.fit_size = teacher_config.hidden_size
+    student_config = BertConfig.from_pretrained(skipbert_args.student_model)
+    student_config.num_labels = num_labels
+    student_config.fit_size = teacher_config.hidden_size
+
+
+    if skipbert_args.num_layers_student > 0:
+        student_config.num_hidden_layers = skipbert_args.num_layers_student
+
+    if skipbert_args.num_full_hidden_layers_student > 0:
+        student_config.num_full_hidden_layers = skipbert_args.num_full_hidden_layers_student
+
+    else:
+        student_config.num_full_hidden_layers = student_config.num_hidden_layers
+
+    student_config.task_type = skipbert_args.output_mode
+    student_config.n_gram_left = skipbert_args.n_gram_left
+    student_config.n_gram_right = skipbert_args.n_gram_right
+    #     student_config.plot_mode = 'plot_passive'
+    student_config.plot_mode = 'force_compute'
+    student_config.ngram_masking = 0.
+
+    if not hasattr(student_config, 'enter_hidden_size'):
+        student_config.enter_hidden_size = student_config.hidden_size
+
+    if not hasattr(student_config, 'max_num_entries'):
+        student_config.max_num_entries = 100000
+
+    return teacher_config, student_config
+
+
+
+def get_data_influence_model(model_cfg: DictConfig, skipbert_args: DictConfig):
     use_cuda = torch.cuda.is_available()
-    device_map = torch.device("cuda:0" if use_cuda else "cpu")
+    device_map = torch.device("cuda" if use_cuda else "cpu")
 
     # Load model with num_labels=1
-    model = BertForSequenceClassification.from_pretrained(
-        "bert-base-uncased",
-        num_labels=1,  # Set number of labels to 1 for regression or single-class tasks
-    ).to(device_map)
+    teacher_name = "bert-base-uncased"
+
+    teacher_config, student_config = get_custom_config(teacher_name=teacher_name, skipbert_args=skipbert_args)
+
     
-    tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
+    # Load model with num_labels=1
+    teacher_model = BertForSequenceClassification.from_pretrained(
+        teacher_name, config=teacher_config
+    ).to(device_map)
+
+    
+
+    student_model = SkipBertForSequenceClassification.from_pretrained(
+        skipbert_args.student_model, config=student_config, 
+        do_fit=skipbert_args.do_fit, share_param=skipbert_args.share_param
+    ).to(device_map)
+
+
+
+    if skipbert_args.freeze_lower_layers:
+        student_model.freeze_shallow_layers()
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        teacher_name, do_lower_case=skipbert_args.do_lower_case, use_fast=True
+    )
     
     if use_cuda:
-        model = prepare_model_for_kbit_training(
-            model, use_gradient_checkpointing=model_cfg.gradient_checkpointing
+        teacher_model = prepare_model_for_kbit_training(
+            teacher_model, use_gradient_checkpointing=model_cfg.gradient_checkpointing
+        )
+        
+        student_model = prepare_model_for_kbit_training(
+            student_model, use_gradient_checkpointing=model_cfg.gradient_checkpointing
         )
 
-    return model, tokenizer
+    return teacher_model, student_model, tokenizer
 
 
 def set_parameters(model, parameters: NDArrays) -> None:

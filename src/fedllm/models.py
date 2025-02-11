@@ -63,9 +63,11 @@ def get_model(model_cfg: DictConfig):
         )
     elif model_cfg.quantization == 8:
         quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+    elif model_cfg.quantization == 0:
+        quantization_config = None
     else:
         raise ValueError(
-            f"Use 4-bit or 8-bit quantization. You passed: {model_cfg.quantization}/"
+            f"Use 4-bit or 8-bit quantization or 0-bit for no quantization. You passed: {model_cfg.quantization}/"
         )
 
     model = AutoModelForCausalLM.from_pretrained(

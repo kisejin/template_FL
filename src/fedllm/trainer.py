@@ -1,8 +1,10 @@
 from accelerate import Accelerator
+from accelerate.state import AcceleratorState
 from torch.utils.data import DataLoader
 import torch
 import copy
 import numpy as np
+import time
 
 
 from transformers import (
@@ -21,7 +23,6 @@ from .skipbert.trainer import compute_metrics_skipbert, SkipBertTrainer
 import inspect
 import logging
 import wandb
-import time
 from tqdm import tqdm
 
 from functools import partial
@@ -45,13 +46,16 @@ class ModelWithDropoutWrapper(torch.nn.Module):
 def time_format(runtime, logger):
 
     if runtime < 60:
-        logger.info(f'Runtime: {runtime:.2f} seconds')
+        # logger.info(f'Runtime: {runtime:.2f} seconds')
+        print(f'Runtime: {runtime:.2f} seconds')
     elif runtime < 3600:  # Less than one hour
         minutes = runtime / 60
-        logger.info(f'Runtime: {minutes:.2f} minutes')
+        # logger.info(f'Runtime: {minutes:.2f} minutes')
+        print(f'Runtime: {minutes:.2f} minutes')
     else:
         hours = runtime / 3600
-        logger.info(f'Runtime: {hours:.2f} hours')
+        # logger.info(f'Runtime: {hours:.2f} hours')
+        print(f'Runtime: {minutes:.2f} minutes')
 
         
 def convert_to_tokens_reg(data, tokenizer, max_seq_length, device):
@@ -129,7 +133,9 @@ class ManualTrainer:
         teacher_data_influence_model, student_data_influence_model, 
         data_influence_tokenizer,task
     ):
+
         self.accelerator = Accelerator()
+        # self.accelerator.state.reset_state()
         self.model = model
         self.tokenizer = tokenizer
         self.args = args
@@ -301,11 +307,21 @@ class ManualTrainer:
         early_stopping_counter = 0
         early_stopping_patience = 5
         training_loss = []
-
+        metric_scores = {
+            'f1': [],
+            'rouge1': [],
+            'rouge2': [],
+            'rougeL': [],
+            'rougeLsum': [],
+        }
+        
+        # self.accelerator.state._reset_state()
+        # self.accelerator = Accelerator()
+        
         for epoch in tqdm(range(self.args.num_train_epochs), 
                           bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
             # Check if it's time to update the data influence model and state is True
-            if self.mates_args.state:
+            if self.mates_args.state and self.selection_fraction < 1.0:
                 if epoch % self.mates_args.update_data_influence_model_step == 0:
                     print("Updating the data influence model and selecting high-quality data...")
                     self.update_data_influence_model()
@@ -350,6 +366,9 @@ class ManualTrainer:
             training_loss.append(avg_epoch_loss)
 
             val_results = self.evaluate()
+            for name, score in val_results.items():
+                if name != 'eval_loss':
+                    metric_scores[name].append(score)
 
             print(f"Epoch {epoch + 1}: Train Loss = {avg_epoch_loss:.4f}, Val Loss = {val_results['eval_loss']:.4f}")
 
@@ -362,8 +381,12 @@ class ManualTrainer:
                 if early_stopping_counter >= early_stopping_patience:
                     print("Early stopping triggered")
                     break
-            
-        return {"training_loss": sum(training_loss) / len(training_loss), "best_val_loss": best_val_loss}
+        index = metric_scores['f1'].index(max(metric_scores['f1']))
+        return {
+            "training_loss": sum(training_loss) / len(training_loss), 
+            "eval_loss": best_val_loss,
+            "eval_scores": {k: v[index] for k, v in metric_scores.items()}
+        }
 
     def select_high_quality_data(self, selection_fraction):
         """
@@ -408,6 +431,12 @@ class ManualTrainer:
                 
                 influence_scores.extend(logits.squeeze(-1).cpu().numpy())
 
+        end_time = time.perf_counter()
+        runtime = round((end_time - start_time), 2)
+        
+        print('Time influence score prediction using SkipBERT: ')
+        time_format(runtime, logger)
+        
         # Normalize influence scores and apply Gumbel-Top-$k$ selection
         influence_scores = np.array(influence_scores)
         print(">> Influence scores shape:", influence_scores.shape)
@@ -426,9 +455,6 @@ class ManualTrainer:
         high_quality_indices = np.argpartition(-influence_scores, selection_size)[:selection_size]
         print(f"Selected {len(high_quality_indices)} high-quality samples.")
         
-        end_time = time.perf_counter()
-        runtime = round((end_time - start_time), 2)
-        time_format(runtime, logger)
 
         return high_quality_indices
 
@@ -459,9 +485,6 @@ class ManualTrainer:
 
         print("Starting to collect holdout-reference pairs...")
         self.model.train()
-        
-        self.accelerator.state._reset_state()
-        self.accelerator = Accelerator()
         
         optimizer = self.accelerator.prepare(
             torch.optim.Adam(self.model.parameters(), lr=self.args.learning_rate)

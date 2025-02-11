@@ -29,6 +29,7 @@ from .myfedavg import FedAvg
 from .data_domains import global_test_set_hete
 from .make_data import Prompter, generate_and_tokenize_prompt
 from .metrics import exact_match, f1, get_rouge_score
+from .utils import save_server_metrics
 
 from datasets import load_dataset, Dataset
 from sklearn.model_selection import train_test_split
@@ -47,6 +48,10 @@ os.environ["WANDB_API_KEY"] = os.getenv("WANDB_API_KEY")
 os.environ["WANDB_NAME"] = os.getenv("WANDB_NAME")
 os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN")
 # os.environ["WANDB_LOG_MODEL"] = "checkpoint"
+
+# Global variable
+client_domain_score = {}
+server_score = {}
 
 
 class SessionIDFilter(logging.Filter):
@@ -273,8 +278,6 @@ def test_model(dataset, model, tokenizer, train_cfg, tmp_dict, sround, mates_arg
         f'{task}_rougeL': results['rougeL'],
         f'{task}_rougeLsum': results['rougeLsum'],
     }
-
-    wandb.finish()
     
     return eval_loss, eval_metrics
     
@@ -288,7 +291,7 @@ def get_evaluate_fn(train_cfg, model_cfg, dataset_cfg, save_every_round, total_r
 
     def evaluate(server_round: int, parameters, config):
         # Save model
-        total_loss, result_metric = 0, {}
+        total_loss, result_metric, list_metric_tasks = 0, {}, {}
         prompter = Prompter(train_cfg.prompt_template_name, train_cfg.verbose)
         if server_round != 0 and (
             server_round == total_round or server_round % save_every_round == 0
@@ -316,12 +319,10 @@ def get_evaluate_fn(train_cfg, model_cfg, dataset_cfg, save_every_round, total_r
                 loss, metrics = test_model(global_test_set_homo, model, tokenizer, train_cfg, tmp_dict, server_round, mates_args, skipbert_args, 'homo')
                 total_loss = loss
                 result_metric = {'homo_f1': metrics['homo_f1']}
+                list_metric_tasks['homo'] = metrics
             else:
-                (
-                    list_loss, list_f1, 
-                    list_rouge1, list_rouge2, 
-                    list_rougeL, list_rougeLsum 
-                ) = [], {}, {}, {}, {}, {}
+                
+                list_loss, list_f1 = [], {}
                 
                 for task in ['general', 'finance', 'math', 'medical', 'code']:
                     ds = global_test_set_hete[task]
@@ -333,12 +334,16 @@ def get_evaluate_fn(train_cfg, model_cfg, dataset_cfg, save_every_round, total_r
                     # list_rouge2[f'{task}_rouge2'] = metrics['rouge2']
                     # list_rougeL[f'{task}_rougeL'] = metrics['rougeL']
                     # list_rougeLsum[f'{task}_rougeLsum'] = metrics['rougeLsum']
-                
+                    list_metric_tasks[task] = metrics
 
                 total_loss = sum(list_loss) / len(list_loss)
                 avg_f1  = sum([v for k, v in list_f1.items()]) / len(list_f1)
                 result_metric = {**list_f1, 'avg_hete_f1': avg_f1}
+                
+            # Save the server's metric for this round 
+            save_server_metrics(round_number=server_round, task_metrics=list_metric_tasks, folder="result_metric")
             
+            # Save model
             model.save_pretrained(f"{save_path}/peft_{server_round}")
 
         return total_loss, result_metric
@@ -396,6 +401,7 @@ def server_fn(context: Context):
     strategy = FedAvg(
         fraction_fit=cfg.train.strategy.fraction_fit,
         fraction_evaluate=cfg.train.strategy.fraction_evaluate,
+        min_available_clients=cfg.train.strategy.min_available_clients,
         on_fit_config_fn=get_on_fit_config(save_path),
         fit_metrics_aggregation_fn=fit_weighted_average,
         initial_parameters=init_model_parameters,

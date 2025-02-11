@@ -158,7 +158,8 @@ def get_data_influence_model(model_cfg: DictConfig, skipbert_args: DictConfig):
 
     student_model = SkipBertForSequenceClassification.from_pretrained(
         skipbert_args.student_model, config=student_config, 
-        do_fit=skipbert_args.do_fit, share_param=skipbert_args.share_param
+        do_fit=skipbert_args.do_fit, 
+        # share_param=skipbert_args.share_param
     ).to(device_map)
 
 

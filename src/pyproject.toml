@@ -33,11 +33,11 @@ serverapp = "fedllm.server_app:app"
 clientapp = "fedllm.client_app:app"
 
 [tool.flwr.app.config]
-num-server-rounds = 2
+num-server-rounds = 2 # 10
 num-supernodes = 10
 
 # Define dataset
-dataset.type = 'homo' # type = ['homo','hete']
+dataset.type = 'hete' # type = ['homo','hete']
 dataset.name = "vicgalle/alpaca-gpt4"
 
 # Define model settings
@@ -48,11 +48,11 @@ model.flash_attention = false
 
 # Use MATES
 mates.state = true
-mates.holdout-ratio = 0.001
-mates.reference-ratio = 0.0005
-mates.holdout-batch-size = 2
-mates.reference-batch-size = 2
-mates.update-data-influence-model-step = 20
+mates.holdout-ratio = 0.1
+mates.reference-ratio = 0.05
+mates.holdout-batch-size = 4
+mates.reference-batch-size = 4
+mates.update-data-influence-model-step = 3
 mates.tokens_per_param = 20
 mates.copied_model_dropout_rate = 0.3
 
@@ -73,7 +73,7 @@ skipbert.gradient-accumulation-steps = 1
 skipbert.eval-batch-size = 4
 skipbert.eval-accumulation-steps = 1
 skipbert.learning-rate = 2.0e-5
-skipbert.num-train-epochs = 1 # 10
+skipbert.num-train-epochs = 10 # 10
 skipbert.eval-step = 10
 skipbert.max-seq-length = 256
 skipbert.weight-decay = 1.0e-4
@@ -132,7 +132,7 @@ model.lora.lora-dropout = 0.05
 model.lora.lora-target-modules = "q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj"
 
 # Define training settings
-train.save-every-round = 5 
+train.save-every-round = 1 
 train.learning-rate-max = 5e-5
 train.learning-rate-min = 1e-6
 train.seq-length = 256
@@ -144,9 +144,9 @@ train.early_stopping_patience = 5
 # Define training agruments for HF Trainer
 train.training-arguments.output-dir = "" 
 train.training-arguments.learning-rate = 3e-4
-train.training-arguments.per-device-train-batch-size = 4
+train.training-arguments.per-device-train-batch-size = 8
 train.training-arguments.gradient-accumulation-steps = 1
-train.training-arguments.per-device-eval-batch-size = 2
+train.training-arguments.per-device-eval-batch-size = 4
 train.training-arguments.eval-accumulation-steps = 1
 train.training-arguments.logging-steps = 10
 train.training-arguments.num-train-epochs = 1
@@ -169,6 +169,7 @@ train.training-arguments.report-to = "wandb"
 # Define local training settings 
 train.strategy.fraction-fit = 0.2 
 train.strategy.fraction-evaluate = 0.0
+train.strategy.min-available-clients = 2 # 6 for full fine tuning
 
 [tool.flwr.federations]
 default = "local-simulation"

@@ -12,6 +12,7 @@ from flwr.client import ClientApp, NumPyClient
 from flwr.common import Context
 from flwr.common.config import unflatten_dict
 from flwr.common.typing import NDArrays, Scalar
+from .utils import save_client_metrics
 from omegaconf import DictConfig
 
 
@@ -98,9 +99,11 @@ class FlowerClient(NumPyClient):
         trainset,
         valset,
         num_rounds,
+        client_id
     ):  # pylint: disable=too-many-arguments
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.train_cfg = train_cfg
+        self.id = client_id
         
         self.training_arguments = TrainingArguments(**train_cfg.training_arguments)
         # self.training_arguments = SFTConfig(**train_cfg.training_arguments, max_seq_length=train_cfg.seq_length) 
@@ -349,11 +352,21 @@ class FlowerClient(NumPyClient):
         params1_value, params2_value  = convert_to_float(params1), convert_to_float(params2)
 
         wandb.log({"total_flops": flops1_value + flops2_value, "macs": macs1_value + macs2_value, "params": params1_value + params2_value})
-            
+        
+        print_results = {"train_loss": results['training_loss'], "flops": flops1_value + flops2_value, "eval_loss": results['eval_loss']}
+        
+        # Save results to filde
+
+        save_client_metrics(
+            client_id=self.id, 
+            round_number=int(config["current_round"]), 
+            metrics={**print_results, **results['eval_scores'], 'total_flops': flops1_value + flops2_value}, 
+            folder="result_metric"
+        )
         return (
             final_model_params,
             len(self.trainset),
-            {"train_loss": results['training_loss'], "flops": flops1_value + flops2_value},
+            print_results,
         )
 
 
@@ -381,6 +394,7 @@ def client_fn(context: Context) -> FlowerClient:
         client_set['train'],
         client_set['test'],
         num_rounds,
+        partition_id
     ).to_client()
 
 

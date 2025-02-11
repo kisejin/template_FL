@@ -74,16 +74,20 @@ class DatasetAbstract:
 class GeneralDataset(DatasetAbstract):
     
     def __init__(self):
-        list_dataset = ["tatsu-lab/alpaca", "vicgalle/alpaca-gpt4"]
+        list_dataset = ["tatsu-lab/alpaca", 
+                        "vicgalle/alpaca-gpt4", 
+                        # "WizardLMTeam/WizardLM_evol_instruct_70k"
+        ]
         super().__init__(list_dataset, 'general')
         self._processing_data()
     
     def _processing_data(self):
         datasets = []
         for dataset_name in self.dataset_name:
-            datasets.append(
-                pd.DataFrame(super().get_dataset(dataset_name=dataset_name, local_data_dir=None)['train'])
-            )
+            df = pd.DataFrame(super().get_dataset(dataset_name=dataset_name, local_data_dir=None)['train'])
+            # if dataset_name == self.dataset_name[-1]:
+            #     df['input'] = [''] * len(df)
+            datasets.append(df)
         dataset = pd.concat(datasets, ignore_index=True)
         self.list_dataset, global_test = self.get_split_dataset(dataset)
         global global_test_set_hete
@@ -196,7 +200,7 @@ class MathDataset(DatasetAbstract):
 class MedicalDataset(DatasetAbstract):
     
     def __init__(self):
-        list_dataset = ["medalpaca/medical_meadow_medical_flashcards"]
+        list_dataset = ["medalpaca/medical_meadow_medical_flashcards", "medalpaca/medical_meadow_medqa"]
         super().__init__(list_dataset, 'medical')
         self._processing_data()
     
@@ -204,7 +208,7 @@ class MedicalDataset(DatasetAbstract):
         datasets = []
         for dataset_name in self.dataset_name:
             ds = super().get_dataset(dataset_name=dataset_name, local_data_dir=None)['train']
-            if dataset_name == 'medalpaca/medical_meadow_medical_flashcards':
+            if dataset_name in self.dataset_name:
                 ds = ds.remove_columns(['instruction'])
                 ds = ds.rename_column("input", "instruction")
             
@@ -221,7 +225,7 @@ class MedicalDataset(DatasetAbstract):
 class CodeDataset(DatasetAbstract):
     
     def __init__(self):
-        list_dataset = ["lucasmccabe-lmi/CodeAlpaca-20k", "WizardLMTeam/WizardLM_evol_instruct_70k"]
+        list_dataset = ["lucasmccabe-lmi/CodeAlpaca-20k", "kisejin/code-gen-multi-language", "shanjay/ds1000-s"]
         super().__init__(list_dataset, 'code')
         self._processing_data()
     
@@ -230,7 +234,7 @@ class CodeDataset(DatasetAbstract):
         for dataset_name in self.dataset_name:
             ds = super().get_dataset(dataset_name=dataset_name, local_data_dir=None)['train']
             df = pd.DataFrame(ds)
-            if dataset_name == 'WizardLMTeam/WizardLM_evol_instruct_70k':
+            if dataset_name == self.dataset_name[-1]:
                 df['input'] = [''] * len(df)
             datasets.append(df)
         dataset = pd.concat(datasets, ignore_index=True)

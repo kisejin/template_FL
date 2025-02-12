@@ -41,7 +41,7 @@ dataset.type = 'hete' # type = ['homo','hete']
 dataset.name = "vicgalle/alpaca-gpt4"
 
 # Define model settings
-model.name = "Qwen/Qwen2.5-1.5B-Instruct" 
+model.name = "HuggingFaceTB/SmolLM-360M-Instruct" 
 model.quantization = 4
 model.gradient-checkpointing = true
 model.flash_attention = false
@@ -107,4 +107,4 @@ default = "local-simulation"
 [tool.flwr.federations.local-simulation]
 options.num-supernodes = 10
 options.backend.client-resources.num-cpus = 8
-options.backend.client-resources.num-gpus = 2.0
+options.backend.client-resources.num-gpus = 1.0

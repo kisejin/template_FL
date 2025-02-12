@@ -211,15 +211,9 @@ class FlowerClient(NumPyClient):
             set_parameters(self.model, main_model_params)
             set_parameters_bert(self.data_influence_model, data_influence_model_params)
 
-            # Compute the total number of tokens in the training set.
-            total_tokens = sum(len(sample.split()) for sample in self.trainset)  # adjust tokenizer if needed
-
-            # Compute the total number of parameters in the main model.
-            main_model_param_count = sum(param.numel() for param in main_model_params)
-
-            # Calculate the optimal number of training tokens based on the Chinchilla scaling law.
-            D_opt = self.mates_args.tokens_per_param * main_model_param_count
-            selection_fraction = D_opt / total_tokens
+            # Calculate the optimal number of training tokens based on the Chinchilla scaling law
+            D_opt = self.mates_args.tokens_per_param * len(main_model_params)
+            selection_fraction = D_opt / len(self.trainset)
             selection_fraction = min(selection_fraction, 1.0)
         else:
             set_parameters(self.model, parameters)
@@ -296,19 +290,19 @@ class FlowerClient(NumPyClient):
         torch.cuda.empty_cache()
 
         # Calculate FLOPs
-        # with get_accelerator().device('cuda:0'):
-        batch_size = self.training_arguments.per_device_eval_batch_size
-        seq_len = self.train_cfg.seq_length
-        flops, macs, params = get_model_profile(
-            self.model,
-            kwargs=input_constructor(batch_size, seq_len, self.tokenizer),
-            print_profile=True,
-            detailed=False,
-        )
-        flops_value = convert_to_float(flops)
-        macs_value = convert_to_float(macs)
-        params_value = convert_to_float(params)
-        wandb.log({"total_flops": flops_value, "macs": macs_value, "params": params_value})
+        with get_accelerator().device('cuda:0'):
+            batch_size = self.training_arguments.per_device_eval_batch_size
+            seq_len = self.train_cfg.seq_length
+            flops, macs, params = get_model_profile(
+              self.model,
+              kwargs=input_constructor(batch_size, seq_len, self.tokenizer),
+              print_profile=True,
+              detailed=False,
+            )
+            flops_value = convert_to_float(flops)
+            macs_value = convert_to_float(macs)
+            params_value = convert_to_float(params)
+            wandb.log({"total_flops": flops_value, "macs": macs_value, "params": params_value})
             
         return (
             final_model_params,

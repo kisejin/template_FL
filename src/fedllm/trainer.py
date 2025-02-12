@@ -8,6 +8,7 @@ import inspect
 import logging
 import wandb
 from tqdm import tqdm
+import time
 import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
@@ -98,7 +99,7 @@ class ManualTrainer:
         if train_dataset:
             self.train_dataset = self._remove_unused_columns(train_dataset, "training")     
             # Prepare data loaders
-            self.full_train_loader = DataLoader(
+            self.train_loader = DataLoader(
                 self.train_dataset,
                 batch_size=self.args.per_device_train_batch_size,
                 shuffle=True,
@@ -107,7 +108,6 @@ class ManualTrainer:
             )
         else:
             self.train_loader = None
-            self.full_train_loader = None
             
         if val_dataset:
             self.val_dataset = self._remove_unused_columns(val_dataset, "validation")          
@@ -148,14 +148,15 @@ class ManualTrainer:
         )
 
         # Prepare model, optimizer, and data loaders for Accelerator
-        self.model, self.optimizer, self.full_train_loader, self.val_loader = self.accelerator.prepare(
-            self.model, self.optimizer, self.full_train_loader, self.val_loader
+        self.model, self.optimizer, self.train_loader, self.val_loader = self.accelerator.prepare(
+            self.model, self.optimizer, self.train_loader, self.val_loader
         )
 
         if self.mates_args.state:
+            self.influence_optimizer = torch.optim.AdamW(self.data_influence_model.parameters(), lr=self.args.learning_rate)
             # Prepare holdout and reference loaders for Accelerator
-            self.data_influence_model, self.holdout_loader, self.reference_loader = self.accelerator.prepare(
-                self.data_influence_model, self.holdout_loader, self.reference_loader
+            self.data_influence_model, self.holdout_loader, self.reference_loader, self.influence_optimizer = self.accelerator.prepare(
+                self.data_influence_model, self.holdout_loader, self.reference_loader, self.influence_optimizer
             )
 
     def _remove_unused_columns(self, dataset, description=None):
@@ -202,30 +203,31 @@ class ManualTrainer:
         early_stopping_patience = 5
         training_loss = []
 
-        for epoch in range(self.args.num_train_epochs):
-            # Check if it's time to update the data influence model and state is True
-            if self.mates_args.state:
-                if epoch % self.mates_args.update_data_influence_model_step == 0:
-                    print("Updating the data influence model and selecting high-quality data...")
-                    self.update_data_influence_model()
-
-                print(f"Selection fraction: {self.selection_fraction}")
-                # Filter high-quality data using the data influence model
-                high_quality_indices = self.select_high_quality_data(
-                    selection_fraction=self.selection_fraction,
-                )
-                self.train_loader = self.accelerator.prepare(
-                    self.create_filtered_dataloader(high_quality_indices)
-                )
-            else:
-                self.train_loader = self.full_train_loader                
-
+        for epoch in tqdm(range(self.args.num_train_epochs), 
+                          bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
             self.model.train()
             epoch_loss = 0.0
 
-            for step, batch in enumerate(self.train_loader):
+            for step, batch in tqdm(enumerate(self.train_loader),
+                                    bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
                 if step >= self.args.max_steps:
                     break
+
+                # Check if it's time to update the data influence model and state is True
+                if self.mates_args.state:
+                    if step % self.mates_args.update_data_influence_model_step == 0:
+                        print("Updating the data influence model and selecting high-quality data...")
+                        self.update_data_influence_model()
+
+                    print(f"Selection fraction: {self.selection_fraction}")
+
+                    if self.selection_fraction < 1:
+                        # Filter high-quality data using the data influence model
+                        high_quality_indices = self.select_high_quality_data(
+                            batch=batch,
+                            selection_fraction=self.selection_fraction,
+                        )
+                        batch = {k: v[high_quality_indices] for k, v in batch.items()}
 
                 self.optimizer.zero_grad()
 
@@ -262,43 +264,47 @@ class ManualTrainer:
                     break
             
         return {"training_loss": sum(training_loss) / len(training_loss), "best_val_loss": best_val_loss}
+    
 
-    def select_high_quality_data(self, selection_fraction):
+    def select_high_quality_data(self, batch, selection_fraction):
         """
         Use the data influence model to predict quality scores and select high-quality data indices.
         """
         print("Selecting high-quality data using the data influence model...")
 
-        # Predict influence scores for the entire dataset
+        # Predict influence scores for the batch
         influence_scores = []
         self.data_influence_model.eval()
-        influence_optimizer = self.accelerator.prepare(
-            torch.optim.AdamW(self.data_influence_model.parameters(), lr=self.args.learning_rate)
-        )
-        with torch.no_grad():
-            for batch in self.full_train_loader:  # Full dataset loader        
-                text = self.tokenizer.batch_decode(
-                    batch['input_ids'], 
-                    skip_special_tokens=True
-                )
-                
-                # Tokenize the text using the BERT tokenizer
-                bert_inputs = self.data_influence_tokenizer(
-                    text,
-                    truncation=True,
-                    padding='max_length',
-                    max_length=256,
-                    return_tensors='pt'
-                ).to(self.accelerator.device)
 
-                # Train the data influence model
-                influence_optimizer.zero_grad()
-                outputs = self.data_influence_model(
-                    input_ids=bert_inputs['input_ids'],
-                    attention_mask=bert_inputs['attention_mask'],
-                )
+        start_time = time.perf_counter()
+        
+        with torch.no_grad():
+            text = self.tokenizer.batch_decode(
+                batch['input_ids'], 
+                skip_special_tokens=True
+            )
+            
+            # Tokenize the text using the BERT tokenizer
+            bert_inputs = self.data_influence_tokenizer(
+                text,
+                truncation=True,
+                padding='max_length',
+                max_length=256,
+                return_tensors='pt'
+            ).to(self.accelerator.device)
+            
+            # Get influence scores from the data influence model
+            outputs = self.data_influence_model(
+                input_ids=bert_inputs['input_ids'],
+                attention_mask=bert_inputs['attention_mask'],
+            )
                 
-                influence_scores.extend(outputs.logits.squeeze(-1).cpu().numpy())
+            influence_scores.extend(outputs.logits.squeeze(-1).cpu().numpy())
+
+        end_time = time.perf_counter()
+        runtime = round((end_time - start_time), 2)
+        
+        print(f'Time influence score prediction using SkipBERT: {runtime}')
 
         # Normalize influence scores and apply Gumbel-Top-$k$ selection
         influence_scores = np.array(influence_scores)
@@ -310,8 +316,13 @@ class ManualTrainer:
         influence_scores += gumbel_noise
 
         # Select top indices based on influence scores
-        selection_size = int(len(influence_scores)*selection_fraction)
-        high_quality_indices = np.argpartition(-influence_scores, selection_size)[:selection_size]
+        print(f"Selection fraction: {selection_fraction}")
+        selection_size = int(len(influence_scores) * selection_fraction)
+        selection_size = max(1, selection_size)  # Ensure at least one sample is selected
+        print(f"List influence score: {influence_scores}, length: {len(influence_scores)}")
+        print(f"Selection size: {selection_size}")
+        selection_size = selection_size if len(influence_scores) != selection_size else selection_size - 1
+        high_quality_indices = np.argpartition(influence_scores, selection_size)[:selection_size]
         print(f"Selected {len(high_quality_indices)} high-quality samples.")
 
         return high_quality_indices
@@ -343,14 +354,11 @@ class ManualTrainer:
 
         print("Starting to collect holdout-reference pairs...")
         self.model.train()
-        optimizer = self.accelerator.prepare(
-            torch.optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
-        )
 
         for step, holdout_batch in enumerate(self.holdout_loader):
             print(f"Processing holdout batch {step+1}/{len(self.holdout_loader)}...")
 
-            optimizer.zero_grad()
+            self.optimizer.zero_grad()
             # Train on the holdout batch (this updates the wrapped model temporarily)
             outputs = self.model(
                 input_ids=holdout_batch['input_ids'],
@@ -363,8 +371,8 @@ class ManualTrainer:
                 skip_special_tokens=True
             )
 
-            holdout_loss.backward()
-            optimizer.step()
+            self.accelerator.backward(holdout_loss)
+            self.optimizer.step()
 
             # Use the trained (updated) model to compute reference losses
             print(f"Evaluating reference losses at step {step}...")
@@ -386,12 +394,12 @@ class ManualTrainer:
             self.model.train()
 
         # Restore self.model to its original (untrained) state.
+        self.model = self.model.model
         self.model.load_state_dict(original_state, strict=False)
 
         # Train the data influence model using the generated pairs
         print("Starting to train the data influence model...")
         self.data_influence_model.train()
-        influence_optimizer = torch.optim.AdamW(self.data_influence_model.parameters(), lr=self.args.learning_rate)
 
         for step, (text, score) in enumerate(holdout_reference_pairs):
             # Tokenize the text using the BERT tokenizer
@@ -407,7 +415,7 @@ class ManualTrainer:
             score_tensor = torch.tensor([score], device=self.accelerator.device, dtype=torch.float32, requires_grad=True)
             
             # Train the data influence model
-            influence_optimizer.zero_grad()
+            self.influence_optimizer.zero_grad()
             outputs = self.data_influence_model(
                 input_ids=bert_inputs['input_ids'],
                 attention_mask=bert_inputs['attention_mask'],
@@ -415,8 +423,7 @@ class ManualTrainer:
             )
             influence_loss = outputs.loss
 
-            influence_loss.backward()
-            influence_optimizer.step()
+            self.accelerator.backward(influence_loss)
 
             if step % 50 == 0:
                 print(f"[Influence Training] Step {step}: Loss = {influence_loss.item():.4f}")

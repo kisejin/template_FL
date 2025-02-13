@@ -208,6 +208,8 @@ class ManualTrainer:
             self.model.train()
             epoch_loss = 0.0
 
+            update_interval = len(self.train_loader) // self.mates_args.num_data_influence_model_update
+
             for step, batch in tqdm(enumerate(self.train_loader),
                                     bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
                 if step >= self.args.max_steps:
@@ -215,7 +217,7 @@ class ManualTrainer:
 
                 # Check if it's time to update the data influence model and state is True
                 if self.mates_args.state:
-                    if step % self.mates_args.update_data_influence_model_step == 0:
+                    if step % update_interval == 0:
                         print("Updating the data influence model and selecting high-quality data...")
                         self.update_data_influence_model()
 

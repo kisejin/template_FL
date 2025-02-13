@@ -209,11 +209,25 @@ class FlowerClient(NumPyClient):
         if self.mates_args.state and int(config["current_round"]) != 1:
             main_model_params, data_influence_model_params = split_models(parameters)
             set_parameters(self.model, main_model_params)
-            set_parameters_bert(self.data_influence_model, data_influence_model_params)
+            set_parameters_bert(self.teacher_data_influence_model, data_influence_model_params)
 
-            # Calculate the optimal number of training tokens based on the Chinchilla scaling law
-            D_opt = self.mates_args.tokens_per_param * len(main_model_params)
-            selection_fraction = D_opt / len(self.trainset)
+            # Compute the total number of tokens in the training set.
+            # print(self.tokenizer.decode(self.trainset[0]['input_ids'], skip_special_tokens = True))
+            total_tokens = sum(
+                len(
+                    f"{self.tokenizer.decode(sample['input_ids'], skip_special_tokens = True)}".split()
+                ) 
+                for sample in self.trainset
+            )  # adjust tokenizer if needed
+
+            # Compute the total number of parameters in the main model.
+            # main_model_param_count = sum(param.numel() for param in main_model_params) # Pytorch params
+            main_model_param_count = sum(param.size for param in main_model_params) # Numpy params
+            print(f"Total tokens: {total_tokens}, Total params: {main_model_param_count}\n")
+
+            # Calculate the optimal number of training tokens based on the Chinchilla scaling law.
+            D_opt = self.mates_args.tokens_per_param * main_model_param_count
+            selection_fraction = D_opt / total_tokens
             selection_fraction = min(selection_fraction, 1.0)
         else:
             set_parameters(self.model, parameters)

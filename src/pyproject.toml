@@ -52,7 +52,7 @@ mates.holdout-ratio = 0.001
 mates.reference-ratio = 0.0005
 mates.holdout-batch-size = 2
 mates.reference-batch-size = 2
-mates.update-data-influence-model-step = 20
+mates.num-data-influence-model-update = 5
 mates.tokens_per_param = 20
 mates.copied_model_dropout_rate = 0.3
 

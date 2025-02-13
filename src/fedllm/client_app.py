@@ -209,7 +209,7 @@ class FlowerClient(NumPyClient):
         if self.mates_args.state and int(config["current_round"]) != 1:
             main_model_params, data_influence_model_params = split_models(parameters)
             set_parameters(self.model, main_model_params)
-            set_parameters_bert(self.teacher_data_influence_model, data_influence_model_params)
+            set_parameters_bert(self.data_influence_model, data_influence_model_params)
 
             # Compute the total number of tokens in the training set.
             # print(self.tokenizer.decode(self.trainset[0]['input_ids'], skip_special_tokens = True))

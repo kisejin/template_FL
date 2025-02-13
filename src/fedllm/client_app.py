@@ -32,7 +32,7 @@ from .models import *
 
 from .flwr_mods import get_wandb_mod
 from .metrics import exact_match, f1, get_rouge_score
-from .utils import clean_output_text
+from .utils import save_client_metrics
 from .make_data import Prompter, generate_and_tokenize_prompt
 
 # Avoid warnings
@@ -84,9 +84,11 @@ class FlowerClient(NumPyClient):
         trainset,
         valset,
         num_rounds,
+        client_id
     ):  # pylint: disable=too-many-arguments
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.train_cfg = train_cfg
+        self.id = client_id
         
         self.training_arguments = TrainingArguments(**train_cfg.training_arguments)
         # self.training_arguments = SFTConfig(**train_cfg.training_arguments, max_seq_length=train_cfg.seq_length) 
@@ -99,7 +101,6 @@ class FlowerClient(NumPyClient):
         self.refset = None
         self.data_influence_model = None
         self.data_influence_tokenizer = None
-
         # instantiate model
         self.model, self.tokenizer = get_model(model_cfg)
         
@@ -317,11 +318,20 @@ class FlowerClient(NumPyClient):
             macs_value = convert_to_float(macs)
             params_value = convert_to_float(params)
             wandb.log({"total_flops": flops_value, "macs": macs_value, "params": params_value})
+            print_results = {"train_loss": results['training_loss'], "flops": flops_value, "eval_loss": results['eval_loss']}
+        
+            # Save results to filde
+            save_client_metrics(
+                client_id=self.id, 
+                round_number=int(config["current_round"]), 
+                metrics={**print_results, **results['eval_scores'], 'total_flops': flops_value}, 
+                folder="result_metric"
+            )
             
         return (
             final_model_params,
             len(self.trainset),
-            {"train_loss": results['training_loss'], "flops": flops_value},
+            print_results,
         )
 
 
@@ -345,6 +355,7 @@ def client_fn(context: Context) -> FlowerClient:
         client_set['train'],
         client_set['test'],
         num_rounds,
+        partition_id
     ).to_client()
 
 

@@ -100,6 +100,7 @@ train.training-arguments.report-to = "wandb"
 # Define local training settings 
 train.strategy.fraction-fit = 0.2 
 train.strategy.fraction-evaluate = 0.0
+train.strategy.min-available-clients = 2 # 6 for full fine tuning
 
 [tool.flwr.federations]
 default = "local-simulation"

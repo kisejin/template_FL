@@ -26,6 +26,20 @@ class ModelWithDropoutWrapper(torch.nn.Module):
             outputs.logits = self.dropout(outputs.logits)
         return outputs
 
+def time_format(runtime, logger):
+
+    if runtime < 60:
+        # logger.info(f'Runtime: {runtime:.2f} seconds')
+        print(f'Runtime: {runtime:.2f} seconds')
+    elif runtime < 3600:  # Less than one hour
+        minutes = runtime / 60
+        # logger.info(f'Runtime: {minutes:.2f} minutes')
+        print(f'Runtime: {minutes:.2f} minutes')
+    else:
+        hours = runtime / 3600
+        # logger.info(f'Runtime: {hours:.2f} hours')
+        print(f'Runtime: {minutes:.2f} minutes')
+
 class ManualLLMSampleCB:
     def __init__(self, model, tokenizer, task, num_samples=10, max_new_tokens=256):
         self.model = model
@@ -203,6 +217,14 @@ class ManualTrainer:
         early_stopping_patience = 5
         training_loss = []
 
+        metric_scores = {
+            'f1': [],
+            'rouge1': [],
+            'rouge2': [],
+            'rougeL': [],
+            'rougeLsum': [],
+        }
+
         for epoch in tqdm(range(self.args.num_train_epochs), 
                           bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
             self.model.train()
@@ -252,6 +274,9 @@ class ManualTrainer:
             training_loss.append(avg_epoch_loss)
 
             val_results = self.evaluate()
+            for name, score in val_results.items():
+                if name != 'eval_loss':
+                    metric_scores[name].append(score)
 
             print(f"Epoch {epoch + 1}: Train Loss = {avg_epoch_loss:.4f}, Val Loss = {val_results['eval_loss']:.4f}")
 
@@ -265,7 +290,12 @@ class ManualTrainer:
                     print("Early stopping triggered")
                     break
             
-        return {"training_loss": sum(training_loss) / len(training_loss), "best_val_loss": best_val_loss}
+        index = metric_scores['f1'].index(max(metric_scores['f1']))
+        return {
+            "training_loss": sum(training_loss) / len(training_loss), 
+            "eval_loss": best_val_loss,
+            "eval_scores": {k: v[index] for k, v in metric_scores.items()}
+        }
     
 
     def select_high_quality_data(self, batch, selection_fraction):

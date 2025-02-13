@@ -1,0 +1,39 @@
+{
+    "round_2": {
+        "general": {
+            "general_f1": 0.5743250490338546,
+            "general_rouge1": 0.6262,
+            "general_rouge2": 0.31415999999999994,
+            "general_rougeL": 0.5514699999999999,
+            "general_rougeLsum": 0.5514699999999999
+        },
+        "finance": {
+            "finance_f1": 0.24869719424244194,
+            "finance_rouge1": 0.29857999999999996,
+            "finance_rouge2": 0.20665,
+            "finance_rougeL": 0.27396000000000004,
+            "finance_rougeLsum": 0.27396000000000004
+        },
+        "math": {
+            "math_f1": 0.5020311089769675,
+            "math_rouge1": 0.6291399999999999,
+            "math_rouge2": 0.3999,
+            "math_rougeL": 0.55288,
+            "math_rougeLsum": 0.55288
+        },
+        "medical": {
+            "medical_f1": 0.43866791362418256,
+            "medical_rouge1": 0.5645499999999999,
+            "medical_rouge2": 0.24894000000000002,
+            "medical_rougeL": 0.50763,
+            "medical_rougeLsum": 0.50763
+        },
+        "code": {
+            "code_f1": 0.43717378193277606,
+            "code_rouge1": 0.57522,
+            "code_rouge2": 0.4107,
+            "code_rougeL": 0.55682,
+            "code_rougeLsum": 0.55682
+        }
+    }
+}

@@ -48,13 +48,14 @@ model.flash_attention = false
 
 # Use MATES
 mates.state = true
-mates.holdout-ratio = 0.01
-mates.reference-ratio = 0.005
+mates.holdout-ratio = 0.02
+mates.reference-ratio = 0.01
 mates.holdout-batch-size = 4
 mates.reference-batch-size = 4
 mates.num-data-influence-model-update = 5
 mates.tokens_per_param = 20
 mates.copied_model_dropout_rate = 0.3
+mates.data_influence_model_epoch = 10
 
 # Define LoRA settings
 model.lora.lora-r = 8 

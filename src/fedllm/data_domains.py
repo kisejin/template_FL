@@ -244,7 +244,9 @@ class CodeDataset(DatasetAbstract):
             {self.metadata['domain']: global_test}
         )
 
-def release_ds():
+import random
+
+def release_ds(downsample_rate=1.0):
     data_domain = {
         'general': GeneralDataset().list_dataset,
         'finance': FinanceDataset().list_dataset,
@@ -255,8 +257,12 @@ def release_ds():
     tmp_dataset = {}
     k = 0
     for task in data_domain.keys():
-        tmp_dataset[str(k)] = data_domain[task][0]
-        tmp_dataset[str(k+1)] = data_domain[task][1]
+        if downsample_rate < 1.0:
+            sampled_data = random.sample(data_domain[task], int(len(data_domain[task]) * downsample_rate))
+        else:
+            sampled_data = data_domain[task]
+        tmp_dataset[str(k)] = sampled_data[0]
+        tmp_dataset[str(k+1)] = sampled_data[1]
         k += 2
     
     return tmp_dataset

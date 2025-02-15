@@ -211,6 +211,27 @@ class ManualTrainer:
 
         return dataset.remove_columns(ignored_columns)
 
+    def _get_evenly_spaced_ints(self, n, num_updates):
+        """
+        Returns num_updates integers approximately evenly spaced between 0 and n (inclusive).
+
+        If the exact spacing is not an integer, the intermediate values are rounded to the nearest integer.
+        """
+        if num_updates == 1:
+            return [0]
+        
+        step = n / (num_updates - 1)
+        result = []
+        for i in range(num_updates):
+            # Always force the first and last elements to be exactly 0 and n.
+            if i == 0:
+                result.append(0)
+            elif i == num_updates - 1:
+                result.append(n)
+            else:
+                result.append(round(i * step))
+        return result
+
     def train(self):
         best_val_loss = float('inf')
         early_stopping_counter = 0
@@ -227,23 +248,31 @@ class ManualTrainer:
 
         print(f"Selection fraction: {self.selection_fraction}")
 
-        for epoch in tqdm(range(self.args.num_train_epochs), 
-                          bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
+        for epoch in tqdm(range(self.args.num_train_epochs),
+                  bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
             self.model.train()
             epoch_loss = 0.0
 
-            update_interval = len(self.train_loader) // self.mates_args.num_data_influence_model_update
-
+            # Precompute update steps if state is active.
+            # We want exactly num_data_influence_model_update updates during the epoch.
+            # To do so, we first compute evenly spaced indices from 0 to (len(train_loader)-1)
+            # with 2 extra points (to include endpoints), and then remove the endpoints.
+            if self.mates_args.state:
+                full_update_indices = self._get_evenly_spaced_ints(len(self.train_loader) - 1,
+                                                            self.mates_args.num_data_influence_model_update + 2)
+                # Exclude the first (0) and last (len(train_loader)-1) indices:
+                update_steps = set(full_update_indices[1:-1])
+            
             for step, batch in tqdm(enumerate(self.train_loader),
                                     bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
                 if step >= self.args.max_steps and self.args.max_steps > 0:
                     break
 
-                # Check if it's time to update the data influence model and state is True
-                if self.mates_args.state:
-                    if step % update_interval == 0:
-                        print("Updating the data influence model and selecting high-quality data...")
-                        self.update_data_influence_model()
+                # If state is active and the current step is one of the precomputed update steps,
+                # update the data influence model.
+                if self.mates_args.state and step in update_steps:
+                    print("Updating the data influence model and selecting high-quality data...")
+                    self.update_data_influence_model()
 
                     if self.selection_fraction < 1:
                         # Filter high-quality data using the data influence model
@@ -387,7 +416,7 @@ class ManualTrainer:
         self.model.train()
 
         for step, holdout_batch in enumerate(self.holdout_loader):
-            print(f"Processing holdout batch {step+1}/{len(self.holdout_loader)}...")
+            # print(f"Processing holdout batch {step+1}/{len(self.holdout_loader)}...")
 
             self.optimizer.zero_grad()
             # Train on the holdout batch (this updates the wrapped model temporarily)
@@ -406,7 +435,7 @@ class ManualTrainer:
             self.optimizer.step()
 
             # Use the trained (updated) model to compute reference losses
-            print(f"Evaluating reference losses at step {step}...")
+            # print(f"Evaluating reference losses at step {step}...")
             self.model.eval()
             reference_losses = []
 
@@ -445,19 +474,22 @@ class ManualTrainer:
             # Convert score to tensor and enable gradients
             score_tensor = torch.tensor([score], device=self.accelerator.device, dtype=torch.float32, requires_grad=True)
             
-            # Train the data influence model
-            self.influence_optimizer.zero_grad()
-            outputs = self.data_influence_model(
-                input_ids=bert_inputs['input_ids'],
-                attention_mask=bert_inputs['attention_mask'],
-                labels=score_tensor
-            )
-            influence_loss = outputs.loss
+            for epoch in range(self.mates_args.data_influence_model_epochs):
+                for step, batch in enumerate(train_dataloader):
+                    # Train the data influence model
+                    self.influence_optimizer.zero_grad()
+                    outputs = self.data_influence_model(
+                        input_ids=bert_inputs['input_ids'],
+                        attention_mask=bert_inputs['attention_mask'],
+                        labels=score_tensor
+                    )
+                    influence_loss = outputs.loss
 
-            self.accelerator.backward(influence_loss)
+                    self.accelerator.backward(influence_loss)
 
-            if step % 50 == 0:
-                print(f"[Influence Training] Step {step}: Loss = {influence_loss.item():.4f}")
+                    if step % 50 == 0:
+                        print(f"[Influence Training] Step {step}: Loss = {influence_loss.item():.4f}")
+
 
 
     def evaluate(self, wandb_sample=False):

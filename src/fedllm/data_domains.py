@@ -225,7 +225,7 @@ class MedicalDataset(DatasetAbstract):
 class CodeDataset(DatasetAbstract):
     
     def __init__(self):
-        list_dataset = ["lucasmccabe-lmi/CodeAlpaca-20k", "kisejin/code-gen-multi-language", "shanjay/ds1000-s"]
+        list_dataset = ["sahil2801/CodeAlpaca-20k", "kisejin/code-gen-multi-language", "shanjay/ds1000-s"]
         super().__init__(list_dataset, 'code')
         self._processing_data()
     

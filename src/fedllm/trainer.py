@@ -23,7 +23,7 @@ class ModelWithDropoutWrapper(torch.nn.Module):
         outputs = self.model(*args, **kwargs)
         # If outputs has logits, apply dropout to them
         if hasattr(outputs, "logits") and outputs.logits is not None:
-            outputs.logits = self.dropout(outputs.logits)
+            outputs.logits = self.dropout(outputs.logits.to(self.model.dtype))
         return outputs
 
 def time_format(runtime, logger):
@@ -225,6 +225,8 @@ class ManualTrainer:
             'rougeLsum': [],
         }
 
+        print(f"Selection fraction: {self.selection_fraction}")
+
         for epoch in tqdm(range(self.args.num_train_epochs), 
                           bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
             self.model.train()
@@ -234,7 +236,7 @@ class ManualTrainer:
 
             for step, batch in tqdm(enumerate(self.train_loader),
                                     bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
-                if step >= self.args.max_steps:
+                if step >= self.args.max_steps and self.args.max_steps > 0:
                     break
 
                 # Check if it's time to update the data influence model and state is True
@@ -242,8 +244,6 @@ class ManualTrainer:
                     if step % update_interval == 0:
                         print("Updating the data influence model and selecting high-quality data...")
                         self.update_data_influence_model()
-
-                    print(f"Selection fraction: {self.selection_fraction}")
 
                     if self.selection_fraction < 1:
                         # Filter high-quality data using the data influence model
@@ -302,7 +302,7 @@ class ManualTrainer:
         """
         Use the data influence model to predict quality scores and select high-quality data indices.
         """
-        print("Selecting high-quality data using the data influence model...")
+        # print("Selecting high-quality data using the data influence model...")
 
         # Predict influence scores for the batch
         influence_scores = []
@@ -336,11 +336,11 @@ class ManualTrainer:
         end_time = time.perf_counter()
         runtime = round((end_time - start_time), 2)
         
-        print(f'Time influence score prediction using SkipBERT: {runtime}')
+        # print(f'Time influence score prediction using SkipBERT: {runtime}')
 
         # Normalize influence scores and apply Gumbel-Top-$k$ selection
         influence_scores = np.array(influence_scores)
-        print(">> Influence scores shape:", influence_scores.shape)
+        # print(">> Influence scores shape:", influence_scores.shape)
 
         # Add Gumbel noise for diversity
         rng = np.random.default_rng()
@@ -348,14 +348,13 @@ class ManualTrainer:
         influence_scores += gumbel_noise
 
         # Select top indices based on influence scores
-        print(f"Selection fraction: {selection_fraction}")
+        # print(f"Selection fraction: {selection_fraction}")
         selection_size = int(len(influence_scores) * selection_fraction)
         selection_size = max(1, selection_size)  # Ensure at least one sample is selected
-        print(f"List influence score: {influence_scores}, length: {len(influence_scores)}")
-        print(f"Selection size: {selection_size}")
-        selection_size = selection_size if len(influence_scores) != selection_size else selection_size - 1
+        # print(f"List influence score: {influence_scores}, length: {len(influence_scores)}")
+        # print(f"Selection size: {selection_size}")
         high_quality_indices = np.argpartition(influence_scores, selection_size)[:selection_size]
-        print(f"Selected {len(high_quality_indices)} high-quality samples.")
+        # print(f"Selected {len(high_quality_indices)} high-quality samples.")
 
         return high_quality_indices
 
@@ -384,7 +383,7 @@ class ManualTrainer:
         # Wrap the model with dropout before training on holdout data.
         self.model = ModelWithDropoutWrapper(self.model, dropout_p=self.mates_args.copied_model_dropout_rate)
 
-        print("Starting to collect holdout-reference pairs...")
+        # print("Starting to collect holdout-reference pairs...")
         self.model.train()
 
         for step, holdout_batch in enumerate(self.holdout_loader):
@@ -427,8 +426,8 @@ class ManualTrainer:
 
         # Restore self.model to its original (untrained) state.
         self.model = self.model.model
+        original_state = {k: v.to(self.model.dtype) for k, v in original_state.items()}
         self.model.load_state_dict(original_state, strict=False)
-
         # Train the data influence model using the generated pairs
         print("Starting to train the data influence model...")
         self.data_influence_model.train()

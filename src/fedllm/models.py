@@ -43,7 +43,7 @@ def get_model(model_cfg: DictConfig):
     https://github.com/huggingface/peft/blob/main/examples/fp4_finetuning/finetune_fp4_opt_bnb_peft.py
     """
     use_cuda = torch.cuda.is_available()
-    device_map = torch.device("cuda:0" if use_cuda else "cpu")
+    device_map = torch.device(f"cuda:{torch.cuda.current_device()}" if use_cuda else "cpu")
     if model_cfg.quantization == 4:
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -53,6 +53,8 @@ def get_model(model_cfg: DictConfig):
         )
     elif model_cfg.quantization == 8:
         quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+    elif model_cfg.quantization == -1:
+        quantization_config = None
     else:
         raise ValueError(
             f"Use 4-bit or 8-bit quantization. You passed: {model_cfg.quantization}/"
@@ -92,7 +94,7 @@ def get_model(model_cfg: DictConfig):
 
 def get_data_influence_model(model_cfg: DictConfig):
     use_cuda = torch.cuda.is_available()
-    device_map = torch.device("cuda:0" if use_cuda else "cpu")
+    device_map = torch.device(f"cuda:{torch.cuda.current_device()}" if use_cuda else "cpu")
 
     # Load model with num_labels=1
     model = BertForSequenceClassification.from_pretrained(

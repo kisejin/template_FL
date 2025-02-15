@@ -33,7 +33,7 @@ serverapp = "fedllm.server_app:app"
 clientapp = "fedllm.client_app:app"
 
 [tool.flwr.app.config]
-num-server-rounds = 2
+num-server-rounds = 10
 num-supernodes = 10
 
 # Define dataset
@@ -42,16 +42,16 @@ dataset.name = "vicgalle/alpaca-gpt4"
 
 # Define model settings
 model.name = "HuggingFaceTB/SmolLM-360M-Instruct" 
-model.quantization = 4
+model.quantization = -1
 model.gradient-checkpointing = true
 model.flash_attention = false
 
 # Use MATES
 mates.state = true
-mates.holdout-ratio = 0.001
-mates.reference-ratio = 0.0005
-mates.holdout-batch-size = 2
-mates.reference-batch-size = 2
+mates.holdout-ratio = 0.01
+mates.reference-ratio = 0.005
+mates.holdout-batch-size = 4
+mates.reference-batch-size = 4
 mates.num-data-influence-model-update = 5
 mates.tokens_per_param = 20
 mates.copied_model_dropout_rate = 0.3
@@ -75,13 +75,13 @@ train.early_stopping_patience = 5
 # Define training agruments for HF Trainer
 train.training-arguments.output-dir = "" 
 train.training-arguments.learning-rate = 3e-4
-train.training-arguments.per-device-train-batch-size = 4
+train.training-arguments.per-device-train-batch-size = 16
 train.training-arguments.gradient-accumulation-steps = 1
-train.training-arguments.per-device-eval-batch-size = 2
+train.training-arguments.per-device-eval-batch-size = 4
 train.training-arguments.eval-accumulation-steps = 1
 train.training-arguments.logging-steps = 10
-train.training-arguments.num-train-epochs = 1
-train.training-arguments.max-steps = 10
+train.training-arguments.num-train-epochs = 2
+train.training-arguments.max-steps = -1
 train.training-arguments.save-steps = 1000
 train.training-arguments.save-total-limit = 10
 train.training-arguments.gradient-checkpointing = true
@@ -108,4 +108,4 @@ default = "local-simulation"
 [tool.flwr.federations.local-simulation]
 options.num-supernodes = 10
 options.backend.client-resources.num-cpus = 8
-options.backend.client-resources.num-gpus = 1.0
+options.backend.client-resources.num-gpus = 2.0

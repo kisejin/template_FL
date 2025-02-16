@@ -40,7 +40,6 @@ os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN")
 # Global variable
 client_domain_score = {}
 server_score = {}
-datetime_str = ""
 
 class LLMSampleCB(WandbCallback):
     def __init__(self, trainer, test_dataset, task, num_samples=10, max_new_tokens=256, log_model="checkpoint"):
@@ -280,6 +279,7 @@ def fit_weighted_average(metrics):
 def server_fn(context: Context):
     """Construct components that set the ServerApp behaviour."""
     # Create output directory given current timestamp
+    global datetime_str
     current_time = datetime.now()
     folder_name = current_time.strftime("%Y-%m-%d_%H-%M-%S")
     datetime_str = folder_name

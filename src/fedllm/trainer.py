@@ -462,7 +462,7 @@ class ManualTrainer:
         self.data_influence_model.train()
 
         for epoch in range(self.mates_args.data_influence_model_epochs):
-            print(f"Epoch {epoch + 1}/{num_epochs}")
+            print(f"Epoch {epoch + 1}/{self.mates_args.data_influence_model_epochs}")
             for step, (text, score) in enumerate(holdout_reference_pairs):
                 # Tokenize the text using the BERT tokenizer
                 bert_inputs = self.data_influence_tokenizer(

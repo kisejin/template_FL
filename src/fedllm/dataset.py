@@ -66,7 +66,6 @@ def load_data(partition_id: int, num_partitions: int, dataset_name: str):
     print(f"<---- Load client {partition_id} --->")
     client_trainset = FDS.load_partition(partition_id, "train")
     client_trainset = client_trainset.rename_column("output", "response")
-    print(client_trainset)
     return client_trainset
 
 def load_data_homo(partition_id: int, num_partitions: int, dataset_name: str):
@@ -105,7 +104,6 @@ def load_data_hete(partition_id: int):
     if client_id_ds is None:
         from .data_domains import client_id_dataset
         client_id_ds = client_id_dataset
-    print(client_id_ds)
     print(f"<---- Load client {partition_id} --->")
     client_set = client_id_ds[str(partition_id)]
     return client_set

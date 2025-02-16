@@ -141,7 +141,7 @@ class ManualTrainer:
 
             self.holdout_loader = DataLoader(
                 self.holdout_dataset,
-                batch_size=self.mates_args.holdout_batch_size,
+                batch_size=1,
                 shuffle=True,
                 collate_fn=self.data_collator,
                 drop_last=self.args.dataloader_drop_last
@@ -270,9 +270,10 @@ class ManualTrainer:
 
                 # If state is active and the current step is one of the precomputed update steps,
                 # update the data influence model.
-                if self.mates_args.state and step in update_steps:
-                    print("Updating the data influence model and selecting high-quality data...")
-                    self.update_data_influence_model()
+                if self.mates_args.state:
+                    if step in update_steps:
+                        print("Updating the data influence model and selecting high-quality data...")
+                        self.update_data_influence_model()
 
                     if self.selection_fraction < 1:
                         # Filter high-quality data using the data influence model
@@ -462,7 +463,6 @@ class ManualTrainer:
         self.data_influence_model.train()
 
         for epoch in range(self.mates_args.data_influence_model_epochs):
-            print(f"Epoch {epoch + 1}/{self.mates_args.data_influence_model_epochs}")
             for step, (text, score) in enumerate(holdout_reference_pairs):
                 # Tokenize the text using the BERT tokenizer
                 bert_inputs = self.data_influence_tokenizer(

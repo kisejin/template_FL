@@ -243,7 +243,7 @@ def get_evaluate_fn(train_cfg, model_cfg, dataset_cfg, save_every_round, total_r
                 result_metric = {**list_f1, 'avg_hete_f1': avg_f1}
 
             # Save the server's metric for this round 
-            save_server_metrics(round_number=server_round, task_metrics=list_metric_tasks, folder=f"result_metric/{datetime_str}")
+            save_server_metrics(round_number=server_round, task_metrics=list_metric_tasks)
             
             model.save_pretrained(f"{save_path}/peft_{server_round}")
 
@@ -278,13 +278,16 @@ def fit_weighted_average(metrics):
 
 def server_fn(context: Context):
     """Construct components that set the ServerApp behaviour."""
-    # Create output directory given current timestamp
     global datetime_str
     current_time = datetime.now()
     folder_name = current_time.strftime("%Y-%m-%d_%H-%M-%S")
     datetime_str = folder_name
     save_path = os.path.join(os.getcwd(), f"results/{folder_name}")
     os.makedirs(save_path, exist_ok=True)
+
+    # Write the datetime_str to a file so clients can read it
+    with open(os.path.join(save_path, "datetime.txt"), "w") as f:
+        f.write(datetime_str)
 
     # Read from config
     num_rounds = context.run_config["num-server-rounds"]

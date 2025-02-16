@@ -34,7 +34,6 @@ from .flwr_mods import get_wandb_mod
 from .metrics import exact_match, f1, get_rouge_score
 from .utils import save_client_metrics
 from .make_data import Prompter, generate_and_tokenize_prompt
-from .server_app import datetime_str
 
 # Avoid warnings
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -320,13 +319,12 @@ class FlowerClient(NumPyClient):
         params_value = convert_to_float(params)
         wandb.log({"total_flops": flops_value, "macs": macs_value, "params": params_value})
         print_results = {"train_loss": results['training_loss'], "flops": flops_value, "eval_loss": results['eval_loss']}
-    
+
         # Save results to filde
         save_client_metrics(
             client_id=self.id, 
             round_number=int(config["current_round"]), 
             metrics={**print_results, **results['eval_scores'], 'total_flops': flops_value}, 
-            folder=f"result_metric/{datetime_str}"
         )
             
         return (

@@ -47,15 +47,14 @@ model.gradient-checkpointing = true
 model.flash_attention = false
 
 # Use MATES
-mates.state = true
+mates.state = false
 mates.holdout-ratio = 0.01
-mates.reference-ratio = 0.01
-mates.holdout-batch-size = 4
-mates.reference-batch-size = 4
-mates.num-data-influence-model-update = 5
+mates.reference-ratio = 0.005
+mates.reference-batch-size = 16
+mates.num-data-influence-model-update =   10
 mates.tokens_per_param = 20
 mates.copied_model_dropout_rate = 0.3
-mates.data_influence_model_epochs = 10
+mates.data_influence_model_epochs = 20
 
 # Define LoRA settings
 model.lora.lora-r = 8 
@@ -64,7 +63,7 @@ model.lora.lora-dropout = 0.05
 model.lora.lora-target-modules = "q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj"
 
 # Define training settings
-train.save-every-round = 5 
+train.save-every-round = 1
 train.learning-rate-max = 5e-5
 train.learning-rate-min = 1e-6
 train.seq-length = 256
@@ -76,9 +75,9 @@ train.early_stopping_patience = 5
 # Define training agruments for HF Trainer
 train.training-arguments.output-dir = "" 
 train.training-arguments.learning-rate = 3e-4
-train.training-arguments.per-device-train-batch-size = 16
+train.training-arguments.per-device-train-batch-size = 32
 train.training-arguments.gradient-accumulation-steps = 1
-train.training-arguments.per-device-eval-batch-size = 4
+train.training-arguments.per-device-eval-batch-size = 16
 train.training-arguments.eval-accumulation-steps = 1
 train.training-arguments.logging-steps = 10
 train.training-arguments.num-train-epochs = 1
@@ -108,5 +107,5 @@ default = "local-simulation"
 
 [tool.flwr.federations.local-simulation]
 options.num-supernodes = 10
-options.backend.client-resources.num-cpus = 8
-options.backend.client-resources.num-gpus = 2.0
+options.backend.client-resources.num-cpus = 16
+options.backend.client-resources.num-gpus = 1.0

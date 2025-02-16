@@ -225,7 +225,7 @@ class MedicalDataset(DatasetAbstract):
 class CodeDataset(DatasetAbstract):
     
     def __init__(self):
-        list_dataset = ["lucasmccabe-lmi/CodeAlpaca-20k", "kisejin/code-gen-multi-language", "shanjay/ds1000-s"]
+        list_dataset = ["sahil2801/CodeAlpaca-20k", "kisejin/code-gen-multi-language", "shanjay/ds1000-s"]
         super().__init__(list_dataset, 'code')
         self._processing_data()
     
@@ -244,7 +244,18 @@ class CodeDataset(DatasetAbstract):
             {self.metadata['domain']: global_test}
         )
 
-def release_ds():
+def release_ds(downsample_rate=0.5):
+    """
+    Release the client_id_dataset with an optional downsample rate.
+    
+    Args:
+        downsample_rate (float): A fraction between 0 and 1 to downsample the datasets.
+                                 For example, 0.1 keeps only 10% of each split.
+    
+    Returns:
+        dict: A dictionary where each key maps to a DatasetDict (with 'train' and 'test' splits)
+              that has been downsampled accordingly.
+    """
     data_domain = {
         'general': GeneralDataset().list_dataset,
         'finance': FinanceDataset().list_dataset,
@@ -255,9 +266,21 @@ def release_ds():
     tmp_dataset = {}
     k = 0
     for task in data_domain.keys():
-        tmp_dataset[str(k)] = data_domain[task][0]
-        tmp_dataset[str(k+1)] = data_domain[task][1]
-        k += 2
+        ds_list = data_domain[task]
+        # Assuming each domain returns two splits
+        for i in range(len(ds_list)):
+            ds_dict = ds_list[i]
+            for split_name, ds in ds_dict.items():
+                if downsample_rate < 1.0:
+                    num_examples = len(ds)
+                    new_length = int(num_examples * downsample_rate)
+                    # Ensure at least one example is selected if dataset is not empty
+                    if new_length == 0 and num_examples > 0:
+                        new_length = 1
+                    # Downsample: shuffle with a fixed seed and select the first new_length examples
+                    ds_dict[split_name] = ds.shuffle(seed=42).select(range(new_length))
+            tmp_dataset[str(k)] = ds_dict
+            k += 1
     
     return tmp_dataset
         

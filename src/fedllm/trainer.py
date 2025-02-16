@@ -30,6 +30,8 @@ import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 
+device_map = "cuda" if torch.cuda.is_available() else "cpu"
+
 # Wrapper to add dropout to the model's outputs (e.g. logits)
 class ModelWithDropoutWrapper(torch.nn.Module):
     def __init__(self, model, dropout_p):
@@ -40,7 +42,7 @@ class ModelWithDropoutWrapper(torch.nn.Module):
         outputs = self.model(*args, **kwargs)
         # If outputs has logits, apply dropout to them
         if hasattr(outputs, "logits") and outputs.logits is not None:
-            outputs.logits = self.dropout(outputs.logits)
+            outputs.logits = self.dropout(outputs.logits.to(self.model.dtype))
         return outputs
     
 def time_format(runtime, logger):
@@ -135,7 +137,6 @@ class ManualTrainer:
     ):
 
         self.accelerator = Accelerator()
-        # self.accelerator.state.reset_state()
         self.model = model
         self.tokenizer = tokenizer
         self.args = args
@@ -160,6 +161,10 @@ class ManualTrainer:
                 collate_fn=self.data_collator,
                 drop_last=self.args.dataloader_drop_last
             )
+
+        else:
+            self.train_loader = None
+
             
         if val_dataset:
             self.val_dataset = self._remove_unused_columns(val_dataset, "validation")          
@@ -207,16 +212,19 @@ class ManualTrainer:
         
         ### Define for MATEs ###
         if self.mates_args.state:
+            
             # Prepare holdout and reference loaders for Accelerator
-            self.teacher_data_influence_model, self.holdout_loader, self.reference_loader = self.accelerator.prepare(
-                self.teacher_data_influence_model, self.holdout_loader, self.reference_loader
+            self.teacher_influence_optimizer = torch.optim.AdamW(self.teacher_data_influence_model.parameters(), lr=self.args.learning_rate)
+            
+            self.data_influence_model, self.holdout_loader, self.reference_loader, self.teacher_influence_optimizer = self.accelerator.prepare(
+                self.teacher_data_influence_model, self.holdout_loader, self.reference_loader, self.teacher_influence_optimizer
             )
             
-            self.student_data_influence_model = self.accelerator.prepare(self.student_data_influence_model)
             ######
         
         ### Define for SkipBERT ###
-
+        # Create a config with use_configured_state set to True
+        
         self.skipbert_train_args = TrainingArguments(
             output_dir=self.skipbert_args.output_dir,
             learning_rate=self.skipbert_args.learning_rate,
@@ -240,7 +248,8 @@ class ManualTrainer:
             dataloader_drop_last=False,
             ddp_find_unused_parameters=False,
             group_by_length=True,
-            load_best_model_at_end = True
+            load_best_model_at_end = True,
+            accelerator_config={"use_configured_state": True}
         )
 
         
@@ -298,6 +307,26 @@ class ManualTrainer:
             )
 
         return dataset.remove_columns(ignored_columns)
+    
+    def _get_evenly_spaced_ints(self, n, num_updates):
+        """
+        Returns num_updates integers approximately evenly spaced between 0 and n (inclusive).
+        If the exact spacing is not an integer, the intermediate values are rounded to the nearest integer.
+        """
+        if num_updates == 1:
+            return [0]
+        
+        step = n / (num_updates - 1)
+        result = []
+        for i in range(num_updates):
+            # Always force the first and last elements to be exactly 0 and n.
+            if i == 0:
+                result.append(0)
+            elif i == num_updates - 1:
+                result.append(n)
+            else:
+                result.append(round(i * step))
+        return result
 
     def train(self):
         best_val_loss = float('inf')
@@ -312,28 +341,40 @@ class ManualTrainer:
             'rougeLsum': [],
         }
         
-        # self.accelerator.state._reset_state()
-        # self.accelerator = Accelerator()
+        print(f"Selection fraction: {self.selection_fraction}")
         
-        for epoch in tqdm(range(self.args.num_train_epochs), 
-                          bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
+        for epoch in tqdm(range(self.args.num_train_epochs),
+                            total=self.args.num_train_epochs,
+                            desc="Epoch",
+                            bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
             self.model.train()
             epoch_loss = 0.0
 
+            # Precompute update steps if state is active.
+            # We want exactly num_data_influence_model_update updates during the epoch.
+            # To do so, we first compute evenly spaced indices from 0 to (len(train_loader)-1)
+            # with 2 extra points (to include endpoints), and then remove the endpoints.
+            if self.mates_args.state:
+                full_update_indices = self._get_evenly_spaced_ints(len(self.train_loader) - 1,
+                                                            self.mates_args.num_data_influence_model_update + 2)
+                # Exclude the first (0) and last (len(train_loader)-1) indices:
+                update_steps = set(full_update_indices[1:-1])
+            
             for step, batch in tqdm(enumerate(self.train_loader),
+                                    total=len(self.train_loader),
+                                    desc="Step",
                                     bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
-                if step >= self.args.max_steps:
+                
+                if step >= self.args.max_steps and self.args.max_steps > 0:
                     break
 
-                # Check if it's time to update the data influence model and state is True
-                if self.mates_args.state:
-                    if step % self.mates_args.update_data_influence_model_step == 0:
-                        print("Updating the data influence model and selecting high-quality data...")
-                        self.update_data_influence_model()
+                # If state is active and the current step is one of the precomputed update steps,
+                # update the data influence model.
+                if self.mates_args.state and step in update_steps:
+                    print("Updating the data influence model and selecting high-quality data...")
+                    self.update_data_influence_model()
 
-                    print(f"Selection fraction: {self.selection_fraction}")
-
-                    if self.selection_fraction < 1:
+                    if self.selection_fraction < 1.0:
                         # Filter high-quality data using the data influence model
                         high_quality_indices = self.select_high_quality_data(
                             batch=batch,
@@ -389,7 +430,7 @@ class ManualTrainer:
         """
         Use the data influence model to predict quality scores and select high-quality data indices.
         """
-        print("Selecting high-quality data using the data influence model...")
+        # print("Selecting high-quality data using the data influence model...")
 
         # Predict influence scores for the batch
         influence_scores = []
@@ -423,12 +464,12 @@ class ManualTrainer:
         end_time = time.perf_counter()
         runtime = round((end_time - start_time), 2)
         
-        print('Time influence score prediction using SkipBERT: ')
+        # print('Time influence score prediction using SkipBERT: ')
         time_format(runtime, logger)
 
         # Normalize influence scores and apply Gumbel-Top-$k$ selection
         influence_scores = np.array(influence_scores)
-        print(">> Influence scores shape:", influence_scores.shape)
+        # print(">> Influence scores shape:", influence_scores.shape)
 
         # Add Gumbel noise for diversity
         rng = np.random.default_rng()
@@ -436,14 +477,16 @@ class ManualTrainer:
         influence_scores += gumbel_noise
 
         # Select top indices based on influence scores
-        print(f"Selection fraction: {selection_fraction}")
+        # print(f"Selection fraction: {selection_fraction}")
+        
         selection_size = int(len(influence_scores) * selection_fraction)
         selection_size = max(1, selection_size)  # Ensure at least one sample is selected
-        print(f"List influence score: {influence_scores}, length: {len(influence_scores)}")
-        print(f"Selection size: {selection_size}")
+        
+        # print(f"Length influence score: {len(influence_scores)}")
+        # print(f"Selection size: {selection_size}")
         selection_size = selection_size if len(influence_scores) != selection_size else selection_size - 1
         high_quality_indices = np.argpartition(influence_scores, selection_size)[:selection_size]
-        print(f"Selected {len(high_quality_indices)} high-quality samples.")
+        # print(f"Selected {len(high_quality_indices)} high-quality samples.")
 
         return high_quality_indices
 
@@ -472,18 +515,16 @@ class ManualTrainer:
         # Wrap the model with dropout before training on holdout data.
         self.model = ModelWithDropoutWrapper(self.model, dropout_p=self.mates_args.copied_model_dropout_rate)
 
-        print("Starting to collect holdout-reference pairs...")
+        # print("Starting to collect holdout-reference pairs...")
         self.model.train()
         
-        optimizer = self.accelerator.prepare(
-            torch.optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
-        )
 
         for step, holdout_batch in tqdm(enumerate(self.holdout_loader),
+                                        total=len(self.holdout_loader),
                                         bar_format='{l_bar}{bar} {percentage:3.0f}% | {n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
-            print(f"Processing holdout batch {step+1}/{len(self.holdout_loader)}...")
+            # print(f"Processing holdout batch {step+1}/{len(self.holdout_loader)}...")
 
-            optimizer.zero_grad()
+            self.optimizer.zero_grad()
             # Train on the holdout batch (this updates the wrapped model temporarily)
             outputs = self.model(
                 input_ids=holdout_batch['input_ids'],
@@ -496,11 +537,12 @@ class ManualTrainer:
                 skip_special_tokens=True
             )
 
-            holdout_loss.backward()
-            optimizer.step()
+            self.accelerator.backward(holdout_loss)
+            # holdout_loss.backward()
+            self.optimizer.step()
 
             # Use the trained (updated) model to compute reference losses
-            print(f"Evaluating reference losses at step {step}...")
+            # print(f"Evaluating reference losses at step {step}...")
             self.model.eval()
             reference_losses = []
 
@@ -520,12 +562,12 @@ class ManualTrainer:
 
         # Restore self.model to its original (untrained) state.
         self.model = self.model.model
+        original_state = {k: v.to(self.model.dtype) for k, v in original_state.items()}
         self.model.load_state_dict(original_state, strict=False)
 
         # Train the data influence model using the generated pairs
         print("Starting to train the data influence model...")
         self.teacher_data_influence_model.train()
-        influence_optimizer = torch.optim.AdamW(self.teacher_data_influence_model.parameters(), lr=self.args.learning_rate)
         
         # Convert to HF datasets
         list_texts, list_score = [], []
@@ -563,43 +605,48 @@ class ManualTrainer:
             drop_last=self.args.dataloader_drop_last
         )
         
-        for step, batch_input in tqdm(
-                                    enumerate(holdout_reference_pairs_loader),
-                                    bar_format='{l_bar}{bar} {percentage:3.0f}% | {n_fmt}/{total_fmt} [{elapsed}<{remaining}]'
-                                ):      # Tokenize the text using the BERT tokenizer
+        
+        
+        for epoch in range(self.mates_args.data_influence_model_epochs):
+            print(f"Epoch {epoch + 1}/{self.mates_args.data_influence_model_epochs}")
             
-            batch_input = {k: v.to('cuda') for k, v in batch_input.items()} # cuda:0
-            # bert_inputs = self.data_influence_tokenizer(
-            #     text,
-            #     truncation=True,
-            #     padding='max_length',
-            #     max_length=256,
-            #     return_tensors='pt'
-            # ).to(self.accelerator.device)
-            
+            for step, batch_input in tqdm(
+                                        enumerate(holdout_reference_pairs_loader),
+                                        bar_format='{l_bar}{bar} {percentage:3.0f}% | {n_fmt}/{total_fmt} [{elapsed}<{remaining}]'
+                                    ):      # Tokenize the text using the BERT tokenizer
 
-            # Convert score to tensor and enable gradients
-            # score_tensor = torch.tensor([score], device=self.accelerator.device, dtype=torch.float32, requires_grad=True)
-            
-            # Train the data influence model
-            influence_optimizer.zero_grad()
-            outputs = self.teacher_data_influence_model(
-                # **batch_input
-                input_ids=batch_input['input_ids'],
-                attention_mask=batch_input['attention_mask'],
-                labels=batch_input['labels'].view(-1)
-            )
+                batch_input = {k: v.to('cuda') for k, v in batch_input.items()} # cuda:0
+                # bert_inputs = self.data_influence_tokenizer(
+                #     text,
+                #     truncation=True,
+                #     padding='max_length',
+                #     max_length=256,
+                #     return_tensors='pt'
+                # ).to(self.accelerator.device)
 
-            # influence_loss = loss_mse(batch_input['labels'].view(-1), outputs.logits.view(-1))
-            # print(f"Loss: {influence_loss} - require_grad: {influence_loss.grad_fn}")
 
-            influence_loss = outputs.loss
-            influence_loss.requires_grad = True
-            self.accelerator.backward(influence_loss)
-            influence_optimizer.step()
+                # Convert score to tensor and enable gradients
+                # score_tensor = torch.tensor([score], device=self.accelerator.device, dtype=torch.float32, requires_grad=True)
 
-            if step % 50 == 0:
-                print(f"[Influence Training] Step {step}: Loss = {influence_loss.item():.4f}")
+                # Train the data influence model
+                self.teacher_influence_optimizer.zero_grad()
+                outputs = self.teacher_data_influence_model(
+                    # **batch_input
+                    input_ids=batch_input['input_ids'],
+                    attention_mask=batch_input['attention_mask'],
+                    labels=batch_input['labels'].view(-1)
+                )
+
+                # influence_loss = loss_mse(batch_input['labels'].view(-1), outputs.logits.view(-1))
+                # print(f"Loss: {influence_loss} - require_grad: {influence_loss.grad_fn}")
+
+                influence_loss = outputs.loss
+
+                self.accelerator.backward(influence_loss)
+                self.teacher_influence_optimizer.step()
+
+                if step % 50 == 0:
+                    print(f"[Influence Training] Step {step}: Loss = {influence_loss.item():.4f}")
             
         
         ### Distillation for SkipBERT ###
@@ -661,7 +708,10 @@ class ManualTrainer:
 
         # Train the model
         print(f"### KD student data influence model ###")
+        start_time = time.perf_counter()
         trainer.train()
+        end_time = time.perf_counter()
+        runtime = round((end_time - start_time), 2)
 
 
     def evaluate(self, wandb_sample=True):
@@ -683,9 +733,9 @@ class ManualTrainer:
                 logits = self.accelerator.gather(outputs.logits)
                 labels = self.accelerator.gather(batch['labels'])
 
-                logits = logits.cpu().numpy()
-                labels = labels.cpu().numpy()
+                logits = logits.to(torch.float32).cpu().numpy()
 
+                labels = labels.to(torch.int32).cpu().numpy()
                 predictions = np.argmax(logits, axis=-1)
                 attention_mask = batch['attention_mask'].cpu().numpy()
 

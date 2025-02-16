@@ -576,7 +576,7 @@ class SkipBertTrainer(Trainer):
 
         if self.use_apex:
             with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-                scaled_loss.requires_grad = True
+                # scaled_loss.requires_grad = True
                 scaled_loss.backward()
             
             if (self.state.global_step + 1) % self.args.gradient_accumulation_steps == 0:
@@ -585,7 +585,7 @@ class SkipBertTrainer(Trainer):
             
         else:
             # Finally we need to normalize the loss for reporting
-            loss.requires_grad = True
+            # loss.requires_grad = True
             if not self.model_accepts_loss_kwargs and self.compute_loss_func is None:
                 loss = loss / self.args.gradient_accumulation_steps
 

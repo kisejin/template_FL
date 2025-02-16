@@ -53,7 +53,7 @@ def get_model(model_cfg: DictConfig):
     https://github.com/huggingface/peft/blob/main/examples/fp4_finetuning/finetune_fp4_opt_bnb_peft.py
     """
     use_cuda = torch.cuda.is_available()
-    device_map = torch.device("cuda:0" if use_cuda else "cpu")
+    device_map = "cuda" if use_cuda else "cpu"
     if model_cfg.quantization == 4:
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -63,7 +63,7 @@ def get_model(model_cfg: DictConfig):
         )
     elif model_cfg.quantization == 8:
         quantization_config = BitsAndBytesConfig(load_in_8bit=True)
-    elif model_cfg.quantization == 0:
+    elif model_cfg.quantization == -1:
         quantization_config = None
     else:
         raise ValueError(
@@ -79,7 +79,7 @@ def get_model(model_cfg: DictConfig):
         ),
     ).to(device_map)
     
-    if use_cuda:
+    if use_cuda and model_cfg.quantization == -1:
         model = prepare_model_for_kbit_training(
             model, use_gradient_checkpointing=model_cfg.gradient_checkpointing
         )
@@ -143,7 +143,7 @@ def get_custom_config(teacher_name, skipbert_args: DictConfig):
 
 def get_data_influence_model(model_cfg: DictConfig, skipbert_args: DictConfig):
     use_cuda = torch.cuda.is_available()
-    device_map = torch.device("cuda" if use_cuda else "cpu")
+    device_map = "cuda" if use_cuda else "cpu"
 
     # Load model with num_labels=1
     teacher_name = "bert-base-uncased"
@@ -173,7 +173,7 @@ def get_data_influence_model(model_cfg: DictConfig, skipbert_args: DictConfig):
         teacher_name, do_lower_case=skipbert_args.do_lower_case, use_fast=True
     )
     
-    if use_cuda:
+    if use_cuda and model_cfg.quantization == -1:
         teacher_model = prepare_model_for_kbit_training(
             teacher_model, use_gradient_checkpointing=model_cfg.gradient_checkpointing
         )

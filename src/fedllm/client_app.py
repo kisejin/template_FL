@@ -44,6 +44,7 @@ from .flwr_mods import get_wandb_mod
 from .metrics import exact_match, f1, get_rouge_score
 from .utils import clean_output_text
 from .make_data import Prompter, generate_and_tokenize_prompt
+from .server_app import datetime_str
 
 # Avoid warnings
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -69,7 +70,7 @@ def input_constructor(batch_size, seq_len, tokenizer):
     # inputs.update({"labels": torch.unsqueeze(labels,dim=0)})
     
     # To device
-    inputs = {k: v.to('cuda:0') for k, v in inputs.items()}
+    inputs = {k: v.to('cuda') for k, v in inputs.items()}
     return inputs
 
 def convert_to_float(value_str):
@@ -101,7 +102,7 @@ class FlowerClient(NumPyClient):
         num_rounds,
         client_id
     ):  # pylint: disable=too-many-arguments
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.train_cfg = train_cfg
         self.id = client_id
         
@@ -213,7 +214,8 @@ class FlowerClient(NumPyClient):
 
             # Split the dataset
             holdout_indices = shuffled_indices[:holdout_size]
-            ref_indices = shuffled_indices[holdout_size:holdout_size + ref_size]
+            ref_indices = shuffled_indices[holdout_size:holdout_size + ref_size + 1]
+            
 
             # Create holdoutset and refset
             self.holdoutset = self.trainset.select(holdout_indices)
@@ -329,30 +331,30 @@ class FlowerClient(NumPyClient):
         torch.cuda.empty_cache()
 
         # Calculate FLOPs
-        # with get_accelerator().device('cuda:0'):
-        batch_size = self.training_arguments.per_device_eval_batch_size
-        seq_len = self.train_cfg.seq_length
+        with get_accelerator().device('cuda'):
+            batch_size = self.training_arguments.per_device_eval_batch_size
+            seq_len = self.train_cfg.seq_length
 
-        flops1, macs1, params1 = get_model_profile(
-          self.model,
-          kwargs=input_constructor(batch_size, seq_len, self.tokenizer),
-          print_profile=True,
-          detailed=False,
-        )
+            flops1, macs1, params1 = get_model_profile(
+              self.model,
+              kwargs=input_constructor(batch_size, seq_len, self.tokenizer),
+              print_profile=True,
+              detailed=False,
+            )
 
-        flops2, macs2, params2 = get_model_profile(
-          self.teacher_data_influence_model,
-          kwargs=input_constructor(batch_size, seq_len, self.data_influence_tokenizer),
-          print_profile=True,
-          detailed=False,
-        )
+            flops2, macs2, params2 = get_model_profile(
+              self.teacher_data_influence_model,
+              kwargs=input_constructor(batch_size, seq_len, self.data_influence_tokenizer),
+              print_profile=True,
+              detailed=False,
+            )
 
-        flops1_value, flops2_value = convert_to_float(flops1), convert_to_float(flops2)
-        macs1_value, macs2_value = convert_to_float(macs1), convert_to_float(macs2)
-        params1_value, params2_value  = convert_to_float(params1), convert_to_float(params2)
+            flops1_value, flops2_value = convert_to_float(flops1), convert_to_float(flops2)
+            macs1_value, macs2_value = convert_to_float(macs1), convert_to_float(macs2)
+            params1_value, params2_value  = convert_to_float(params1), convert_to_float(params2)
 
-        wandb.log({"total_flops": flops1_value + flops2_value, "macs": macs1_value + macs2_value, "params": params1_value + params2_value})
-        
+            wandb.log({"total_flops": flops1_value + flops2_value, "macs": macs1_value + macs2_value, "params": params1_value + params2_value})
+
         print_results = {"train_loss": results['training_loss'], "flops": flops1_value + flops2_value, "eval_loss": results['eval_loss']}
         
         # Save results to filde
@@ -361,7 +363,7 @@ class FlowerClient(NumPyClient):
             client_id=self.id, 
             round_number=int(config["current_round"]), 
             metrics={**print_results, **results['eval_scores'], 'total_flops': flops1_value + flops2_value}, 
-            folder="result_metric"
+            folder=f"result_metric/{datetime_str}"
         )
         return (
             final_model_params,

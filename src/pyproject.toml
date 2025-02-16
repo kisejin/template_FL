@@ -41,21 +41,22 @@ dataset.type = 'hete' # type = ['homo','hete']
 dataset.name = "vicgalle/alpaca-gpt4"
 
 # Define model settings
-model.name = "HuggingFaceTB/SmolLM-360M-Instruct" 
-model.quantization = 0
+model.name = "HuggingFaceTB/SmolLM-360M-Instruct" # "Qwen/Qwen2.5-1.5B-Instruct"
+model.quantization = -1
 model.gradient-checkpointing = true
 model.flash_attention = false
 
 # Use MATES
 mates.state = true
 # [0.1, 0.05], [0.2, 0.1], [0.3, 0.15]
-mates.holdout-ratio = 0.005
-mates.reference-ratio = 0.001
+mates.holdout-ratio = 0.02
+mates.reference-ratio = 0.005 # 0.01
 mates.holdout-batch-size = 4
 mates.reference-batch-size = 4
-mates.update-data-influence-model-step = 100
+mates.num-data-influence-model-update = 5
 mates.tokens_per_param = 20
 mates.copied_model_dropout_rate = 0.3
+mates.data_influence_model_epochs = 10
 
 
 ### Use SkipBERT ###
@@ -74,7 +75,7 @@ skipbert.gradient-accumulation-steps = 1
 skipbert.eval-batch-size = 4
 skipbert.eval-accumulation-steps = 1
 skipbert.learning-rate = 2.0e-5
-skipbert.num-train-epochs = 10 # 10
+skipbert.num-train-epochs = 1 # 2
 skipbert.eval-step = 10
 skipbert.max-seq-length = 256
 skipbert.weight-decay = 1.0e-4
@@ -82,7 +83,7 @@ skipbert.warmup-steps = 100 # 500
 skipbert.do-train = true
 skipbert.do-eval = true
 skipbert.do-predict = false
-skipbert.max-steps = 20
+skipbert.max-steps = 20 # -1
 skipbert.evaluation-strategy = "epoch"
 skipbert.save-strategy = "epoch"
 skipbert.lr-scheduler-type = "cosine" # or 'warmup-linear'
@@ -145,7 +146,7 @@ train.early_stopping_patience = 5
 # Define training agruments for HF Trainer
 train.training-arguments.output-dir = "" 
 train.training-arguments.learning-rate = 3e-4
-train.training-arguments.per-device-train-batch-size = 8
+train.training-arguments.per-device-train-batch-size = 16
 train.training-arguments.gradient-accumulation-steps = 1
 train.training-arguments.per-device-eval-batch-size = 4
 train.training-arguments.eval-accumulation-steps = 1
@@ -168,7 +169,7 @@ train.training-arguments.load_best_model_at_end = true
 train.training-arguments.report-to = "wandb"
 
 # Define local training settings 
-train.strategy.fraction-fit = 0.2 
+train.strategy.fraction-fit = 0.2 # 0.6
 train.strategy.fraction-evaluate = 0.0
 train.strategy.min-available-clients = 2 # 6 for full fine tuning
 

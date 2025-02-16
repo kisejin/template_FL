@@ -52,7 +52,7 @@ os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN")
 # Global variable
 client_domain_score = {}
 server_score = {}
-
+datetime_str = ""
 
 class SessionIDFilter(logging.Filter):
 
@@ -152,7 +152,7 @@ class LLMSampleCB(WandbCallback):
             # padding='max_length', max_length=self.max_new_tokens, 
             return_tensors='pt'
         )
-        input_ids = tokenized_prompt['input_ids'].to('cuda:0')
+        input_ids = tokenized_prompt['input_ids'].to('cuda')
         
         with torch.inference_mode():
             output = self.model.generate(input_ids, generation_config=self.gen_config)
@@ -187,7 +187,7 @@ def test_model(dataset, model, tokenizer, train_cfg, tmp_dict, sround, mates_arg
     
     wandb.init(
         project='FL@CSS25',
-        name=f'global_eval_round_{sround}',
+        name=f'skipbert_global_eval_round_{sround}',
         id=f"round_{sround}",
         resume="allow",
         reinit=True,
@@ -341,7 +341,7 @@ def get_evaluate_fn(train_cfg, model_cfg, dataset_cfg, save_every_round, total_r
                 result_metric = {**list_f1, 'avg_hete_f1': avg_f1}
                 
             # Save the server's metric for this round 
-            save_server_metrics(round_number=server_round, task_metrics=list_metric_tasks, folder="result_metric")
+            save_server_metrics(round_number=server_round, task_metrics=list_metric_tasks, folder=f"result_metric/{datetime_str}")
             
             # Save model
             model.save_pretrained(f"{save_path}/peft_{server_round}")
@@ -380,10 +380,12 @@ def server_fn(context: Context):
     
     configure_logging()
     logger = logging.getLogger(__name__)
+    global datetime_str
     
     # Create output directory given current timestamp
     current_time = datetime.now()
     folder_name = current_time.strftime("%Y-%m-%d_%H-%M-%S")
+    datetime_str = folder_name
     save_path = os.path.join(os.getcwd(), f"results/{folder_name}")
     os.makedirs(save_path, exist_ok=True)
 

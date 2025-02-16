@@ -461,34 +461,34 @@ class ManualTrainer:
         print("Starting to train the data influence model...")
         self.data_influence_model.train()
 
-        for step, (text, score) in enumerate(holdout_reference_pairs):
-            # Tokenize the text using the BERT tokenizer
-            bert_inputs = self.data_influence_tokenizer(
-                text,
-                truncation=True,
-                padding='max_length',
-                max_length=256,
-                return_tensors='pt'
-            ).to(self.accelerator.device)
+        for epoch in range(self.mates_args.data_influence_model_epochs):
+            print(f"Epoch {epoch + 1}/{num_epochs}")
+            for step, (text, score) in enumerate(holdout_reference_pairs):
+                # Tokenize the text using the BERT tokenizer
+                bert_inputs = self.data_influence_tokenizer(
+                    text,
+                    truncation=True,
+                    padding='max_length',
+                    max_length=256,
+                    return_tensors='pt'
+                ).to(self.accelerator.device)
 
-            # Convert score to tensor and enable gradients
-            score_tensor = torch.tensor([score], device=self.accelerator.device, dtype=torch.float32, requires_grad=True)
-            
-            for epoch in range(self.mates_args.data_influence_model_epochs):
-                for step, batch in enumerate(train_dataloader):
-                    # Train the data influence model
-                    self.influence_optimizer.zero_grad()
-                    outputs = self.data_influence_model(
-                        input_ids=bert_inputs['input_ids'],
-                        attention_mask=bert_inputs['attention_mask'],
-                        labels=score_tensor
-                    )
-                    influence_loss = outputs.loss
+                # Convert score to tensor and enable gradients
+                score_tensor = torch.tensor([score], device=self.accelerator.device, dtype=torch.float32, requires_grad=True)
+                
+                # Train the data influence model
+                self.influence_optimizer.zero_grad()
+                outputs = self.data_influence_model(
+                    input_ids=bert_inputs['input_ids'],
+                    attention_mask=bert_inputs['attention_mask'],
+                    labels=score_tensor
+                )
+                influence_loss = outputs.loss
 
-                    self.accelerator.backward(influence_loss)
+                self.accelerator.backward(influence_loss)
 
-                    if step % 50 == 0:
-                        print(f"[Influence Training] Step {step}: Loss = {influence_loss.item():.4f}")
+                if step % 50 == 0:
+                    print(f"[Influence Training] Step {step}: Loss = {influence_loss.item():.4f}")
 
 
 

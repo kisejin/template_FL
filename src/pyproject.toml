@@ -42,16 +42,16 @@ dataset.name = "vicgalle/alpaca-gpt4"
 
 # Define model settings
 model.name = "HuggingFaceTB/SmolLM-360M-Instruct" 
-model.quantization = 8
+model.quantization = -1
 model.gradient-checkpointing = true
-model.flash_attention = true
+model.flash_attention = false
 
 # Use MATES
-mates.state = false
+mates.state = true
 mates.holdout-ratio = 0.01
-mates.reference-ratio = 0.005
+mates.reference-ratio = 0.001
 mates.reference-batch-size = 16
-mates.num-data-influence-model-update =     10
+mates.num-data-influence-model-update = 10
 mates.tokens_per_param = 20
 mates.copied_model_dropout_rate = 0.3
 mates.data_influence_model_epochs = 20

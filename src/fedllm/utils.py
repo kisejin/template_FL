@@ -56,7 +56,7 @@ def clean_output_text(text):
     
     return cleaned_text.strip()
 
-def save_client_metrics(client_id: int, round_number: int, metrics: dict, folder="result_metric2"):
+def save_client_metrics(client_id: int, round_number: int, metrics: dict, folder="result_metric/20250217_045516"):
     """
     Save or update a JSON file for a client with metrics from the given round.
     The file will be named client-{client_id}.json and follow the format:
@@ -87,7 +87,7 @@ def save_client_metrics(client_id: int, round_number: int, metrics: dict, folder
         json.dump(data, f, indent=4)
 
 
-def save_server_metrics(round_number: int, task_metrics: dict, folder="result_metric2"):
+def save_server_metrics(round_number: int, task_metrics: dict, folder="result_metric/20250217_045516"):
     """
     Save or update a JSON file for the server with metrics from the given round.
     The file will be named global_server.json and follow the format:

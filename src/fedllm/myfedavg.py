@@ -17,13 +17,13 @@
 Paper: arxiv.org/abs/1602.05629
 """
 
-import time
-import wandb
-import pickle
 import logging
+import pickle
+import time
 from logging import WARNING
 from typing import Callable, Optional, Union
 
+import wandb
 from flwr.common import (
     EvaluateIns,
     EvaluateRes,
@@ -39,9 +39,9 @@ from flwr.common import (
 from flwr.common.logger import log
 from flwr.server.client_manager import ClientManager
 from flwr.server.client_proxy import ClientProxy
+from flwr.server.strategy import Strategy
 
 from .myaggregation import aggregate, aggregate_inplace, weighted_loss_avg
-from flwr.server.strategy import Strategy
 
 WARNING_MIN_AVAILABLE_CLIENTS_TOO_LOW = """
 Setting `min_available_clients` lower than `min_fit_clients` or
@@ -55,6 +55,7 @@ logger = logging.getLogger(__name__)
 
 
 client_id_idx = {}
+
 
 # pylint: disable=line-too-long
 class FedAvg(Strategy):
@@ -112,14 +113,16 @@ class FedAvg(Strategy):
             ]
         ] = None,
         on_fit_config_fn: Optional[Callable[[int], dict[str, Scalar]]] = None,
-        on_evaluate_config_fn: Optional[Callable[[int], dict[str, Scalar]]] = None,
+        on_evaluate_config_fn: Optional[
+            Callable[[int], dict[str, Scalar]]
+        ] = None,
         accept_failures: bool = True,
         initial_parameters: Optional[Parameters] = None,
         fit_metrics_aggregation_fn: Optional[MetricsAggregationFn] = None,
         evaluate_metrics_aggregation_fn: Optional[MetricsAggregationFn] = None,
         inplace: bool = True,
         num_rounds: int = 10,
-        comm_table = None
+        comm_table=None,
     ) -> None:
         super().__init__()
 
@@ -153,19 +156,29 @@ class FedAvg(Strategy):
     def num_fit_clients(self, num_available_clients: int) -> tuple[int, int]:
         """Return the sample size and the required number of available clients."""
         num_clients = int(num_available_clients * self.fraction_fit)
-        return max(num_clients, self.min_fit_clients), self.min_available_clients
+        return (
+            max(num_clients, self.min_fit_clients),
+            self.min_available_clients,
+        )
 
-    def num_evaluation_clients(self, num_available_clients: int) -> tuple[int, int]:
+    def num_evaluation_clients(
+        self, num_available_clients: int
+    ) -> tuple[int, int]:
         """Use a fraction of available clients for evaluation."""
         num_clients = int(num_available_clients * self.fraction_evaluate)
-        return max(num_clients, self.min_evaluate_clients), self.min_available_clients
+        return (
+            max(num_clients, self.min_evaluate_clients),
+            self.min_available_clients,
+        )
 
     def initialize_parameters(
         self, client_manager: ClientManager
     ) -> Optional[Parameters]:
         """Initialize global model parameters."""
         initial_parameters = self.initial_parameters
-        self.initial_parameters = None  # Don't keep initial parameters in memory
+        self.initial_parameters = (
+            None  # Don't keep initial parameters in memory
+        )
         return initial_parameters
 
     def evaluate(
@@ -183,7 +196,10 @@ class FedAvg(Strategy):
         return loss, metrics
 
     def configure_fit(
-        self, server_round: int, parameters: Parameters, client_manager: ClientManager
+        self,
+        server_round: int,
+        parameters: Parameters,
+        client_manager: ClientManager,
     ) -> list[tuple[ClientProxy, FitIns]]:
         """Configure the next round of training."""
         config = {}
@@ -191,11 +207,10 @@ class FedAvg(Strategy):
             # Custom fit config function provided
             config = self.on_fit_config_fn(server_round)
         fit_ins = FitIns(parameters, config)
-        
+
         if not client_id_idx:
             for i, (client_id, _) in enumerate(client_manager.clients.items()):
                 client_id_idx[client_id] = i
-        
 
         # Sample clients
         sample_size, min_num_clients = self.num_fit_clients(
@@ -209,7 +224,10 @@ class FedAvg(Strategy):
         return [(client, fit_ins) for client in clients]
 
     def configure_evaluate(
-        self, server_round: int, parameters: Parameters, client_manager: ClientManager
+        self,
+        server_round: int,
+        parameters: Parameters,
+        client_manager: ClientManager,
     ) -> list[tuple[ClientProxy, EvaluateIns]]:
         """Configure the next round of evaluation."""
         # Do not configure federated evaluation if fraction eval is 0.
@@ -241,6 +259,9 @@ class FedAvg(Strategy):
         failures: list[Union[tuple[ClientProxy, FitRes], BaseException]],
     ) -> tuple[Optional[Parameters], dict[str, Scalar]]:
         """Aggregate fit results using weighted average."""
+
+        print(f"Aggregating fit results for round {results}")
+
         if not results:
             return None, {}
         # Do not aggregate if there are failures and failures are not accepted
@@ -253,7 +274,10 @@ class FedAvg(Strategy):
         else:
             # Convert results
             weights_results = [
-                (parameters_to_ndarrays(fit_res.parameters), fit_res.num_examples)
+                (
+                    parameters_to_ndarrays(fit_res.parameters),
+                    fit_res.num_examples,
+                )
                 for _, fit_res in results
             ]
             aggregated_ndarrays = aggregate(weights_results)
@@ -263,7 +287,9 @@ class FedAvg(Strategy):
         # Aggregate custom metrics if aggregation fn was provided
         metrics_aggregated = {}
         if self.fit_metrics_aggregation_fn:
-            fit_metrics = [(res.num_examples, res.metrics) for _, res in results]
+            fit_metrics = [
+                (res.num_examples, res.metrics) for _, res in results
+            ]
             metrics_aggregated = self.fit_metrics_aggregation_fn(fit_metrics)
         elif server_round == 1:  # Only log this warning once
             log(WARNING, "No fit_metrics_aggregation_fn provided")
@@ -294,14 +320,17 @@ class FedAvg(Strategy):
         # Aggregate custom metrics if aggregation fn was provided
         metrics_aggregated = {}
         if self.evaluate_metrics_aggregation_fn:
-            eval_metrics = [(res.num_examples, res.metrics) for _, res in results]
-            metrics_aggregated = self.evaluate_metrics_aggregation_fn(eval_metrics)
+            eval_metrics = [
+                (res.num_examples, res.metrics) for _, res in results
+            ]
+            metrics_aggregated = self.evaluate_metrics_aggregation_fn(
+                eval_metrics
+            )
         elif server_round == 1:  # Only log this warning once
             log(WARNING, "No evaluate_metrics_aggregation_fn provided")
 
         return loss_aggregated, metrics_aggregated
 
-    
 
 class MyFedAvg(FedAvg):
     def __init__(self, *args, **kwargs):
@@ -315,11 +344,11 @@ class MyFedAvg(FedAvg):
         # If you want to measure "communication time" (for the aggregation step)
         self.total_comm_time = 0.0
         self.round_comm_time = {}
-    
+
     def _get_param_size_estimate(self, parameters):
         """
         Return an estimate of the parameter size in bytes.
-        Approach 1: Summation of NDArray .nbytes 
+        Approach 1: Summation of NDArray .nbytes
         Approach 2: pickle.dumps(...) for more accurate overhead measure
         """
         # Approach 1 (fast):
@@ -327,7 +356,7 @@ class MyFedAvg(FedAvg):
         # print(len(parameters.tensors)
         size = sum([len(tensor) for tensor in parameters.tensors])
         return size
-    
+
         # Approach 2 (optional, more accurate but slower):
         # all_params = [tensor for tensor in parameters.tensors]
         # data = pickle.dumps(all_params)
@@ -339,25 +368,23 @@ class MyFedAvg(FedAvg):
         results: list[tuple[ClientProxy, FitRes]],
         failures: list[Union[tuple[ClientProxy, FitRes], BaseException]],
     ) -> tuple[Optional[Parameters], dict[str, Scalar]]:
-        
-        
+
         # Optionally measure how long the aggregation (and the associated communication) takes
         start_time = time.time()
-        
+
         # Let FedAvg do its usual job (averaging the model updates)
-        aggregated_parameters = super().aggregate_fit(server_round, results, failures)
-        
+        aggregated_parameters = super().aggregate_fit(
+            server_round, results, failures
+        )
+
         end_time = time.time()
         comm_time = end_time - start_time
         self.total_comm_time += comm_time
         self.round_comm_time[server_round] = comm_time
-        
-        
+
         # Print/log each round's communication metrics
-        logger.info(
-            f"[Round {server_round}] | Comm time: {comm_time:.2f}s"
-        )
-        
+        logger.info(f"[Round {server_round}] | Comm time: {comm_time:.2f}s")
+
         # If wandb is active, log to wandb
         self.comm_table.add_data(
             server_round,
@@ -367,6 +394,8 @@ class MyFedAvg(FedAvg):
             # "total_bytes_received_MB": self.total_bytes_received / (1024**2),
             self.total_comm_time,
         )
-        print(f"[Round {server_round}] | Comm time: {comm_time:.2f}s | Total Comm Time: {self.total_comm_time:.2f}s")
+        print(
+            f"[Round {server_round}] | Comm time: {comm_time:.2f}s | Total Comm Time: {self.total_comm_time:.2f}s"
+        )
 
         return aggregated_parameters

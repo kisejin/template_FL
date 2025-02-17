@@ -1,3 +1,6 @@
+import json
+import os
+
 def clean_output_text(text):
     """
     Clean and normalize text from LLM outputs by removing noise and repetitions.
@@ -52,3 +55,72 @@ def clean_output_text(text):
     cleaned_text = ' '.join(cleaned_text.split())  # Normalize spacing
     
     return cleaned_text.strip()
+
+
+def save_client_metrics(client_id: int, round_number: int, metrics: dict, folder="result_metric"):
+    """
+    Save or update a JSON file for a client with metrics from the given round.
+    The file will be named client-{client_id}.json and follow the format:
+    
+    {
+        "round_{i}": {
+            "f1": <value>,
+            "rouge1": <value>
+        },
+        ...
+    }
+    """
+    os.makedirs(folder, exist_ok=True)
+    filename = os.path.join(folder, f"client-{client_id}.json")
+    
+    # Load previous metrics if file exists
+    if os.path.exists(filename):
+        with open(filename, "r") as f:
+            data = json.load(f)
+    else:
+        data = {}
+    
+    # Update data with current round metrics
+    data[f"round_{round_number}"] = metrics
+    
+    # Write the updated data back to file
+    with open(filename, "w") as f:
+        json.dump(data, f, indent=4)
+
+
+def save_server_metrics(round_number: int, task_metrics: dict, folder="result_metric"):
+    """
+    Save or update a JSON file for the server with metrics from the given round.
+    The file will be named global_server.json and follow the format:
+    
+    {
+        "round_{i}": {
+            "task1": {
+                "f1": <value>,
+                "rouge1": <value>
+            },
+            "task2": {
+                "f1": <value>,
+                "rouge1": <value>
+            },
+            ...
+        },
+        ...
+    }
+    """
+    os.makedirs(folder, exist_ok=True)
+    filename = os.path.join(folder, "global_server.json")
+    
+    # Load previous metrics if file exists
+    if os.path.exists(filename):
+        with open(filename, "r") as f:
+            data = json.load(f)
+    else:
+        data = {}
+    
+    # Update data with current round metrics
+    data[f"round_{round_number}"] = task_metrics
+    
+    # Write the updated data back to file
+    with open(filename, "w") as f:
+        json.dump(data, f, indent=4)

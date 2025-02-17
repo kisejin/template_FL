@@ -33,15 +33,16 @@ serverapp = "fedllm.server_app:app"
 clientapp = "fedllm.client_app:app"
 
 [tool.flwr.app.config]
-num-server-rounds = 1
+num-server-rounds = 10 # 10 
 num-supernodes = 10
 
 # Define dataset
-dataset.type = 'homo' # type = ['homo','hete']
+dataset.type = 'hete' # type = ['homo','hete']
 dataset.name = "vicgalle/alpaca-gpt4"
 
 # Define model settings
-model.name = "Qwen/Qwen2.5-1.5B-Instruct" 
+model.name = "HuggingFaceTB/SmolLM-360M-Instruct" #"Qwen/Qwen2.5-1.5B-Instruct" 
+model.enable_quantization = false
 model.quantization = 4
 model.gradient-checkpointing = true
 model.flash_attention = true
@@ -53,42 +54,45 @@ model.lora.lora-dropout = 0.05
 model.lora.lora-target-modules = "q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj"
 
 # Define training settings
-train.save-every-round = 5 
+train.save-every-round = 1 
 train.learning-rate-max = 5e-5
 train.learning-rate-min = 1e-6
 train.seq-length = 256
 train.prompt_template_name = "alpaca"
 train.train_on_inputs = true
 train.verbose = false
+train.early_stopping_patience = 5
 
-# Define training agruments for HF Trainer
+# Define training arguments for HF Trainer
 train.training-arguments.output-dir = "" 
 train.training-arguments.learning-rate = 3e-4
-train.training-arguments.per-device-train-batch-size = 4
+train.training-arguments.per-device-train-batch-size = 16
 train.training-arguments.gradient-accumulation-steps = 1
-train.training-arguments.per-device-eval-batch-size = 2
+train.training-arguments.per-device-eval-batch-size = 8
 train.training-arguments.eval-accumulation-steps = 1
-train.training-arguments.logging-steps = 10
-train.training-arguments.num-train-epochs = 1
-train.training-arguments.max-steps = 10
-train.training-arguments.save-steps = 1000
-train.training-arguments.save-total-limit = 10
+train.training-arguments.logging-steps = 100
+train.training-arguments.num-train-epochs = 1 # 1
+train.training-arguments.max-steps = -1 # -1: full dataset
+# train.training-arguments.save-steps = 500
+train.training-arguments.save-total-limit = 2
 train.training-arguments.gradient-checkpointing = true
 train.training-arguments.lr-scheduler-type = "cosine"
 train.training-arguments.warmup-steps = 0
 train.training-arguments.do-train = true
-train.training-arguments.do-eval = true
+train.training-arguments.do-eval = false
 train.training-arguments.dataloader-drop-last = false
 train.training-arguments.eval-strategy = "epoch"
 train.training-arguments.save-strategy = "epoch"
 train.training-arguments.ddp-find-unused-parameters = false
 train.training-arguments.group-by-length = true
-train.training-arguments.load_best_model_at_end = true
+# train.training-arguments.load_best_model_at_end = true
 train.training-arguments.report-to = "wandb"
 
 # Define local training settings 
-train.strategy.fraction-fit = 0.2 
+train.strategy.fraction-fit = 0.6 # 0.6 
 train.strategy.fraction-evaluate = 0.0
+train.strategy.min-fit-clients = 6
+train.strategy.min-available-clients = 10
 
 [tool.flwr.federations]
 default = "local-simulation"

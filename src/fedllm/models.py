@@ -1,9 +1,14 @@
+import copy
 import math
+import time
+from collections import OrderedDict
+from typing import Dict, List
 
 import torch
 import torch.nn as nn
+import wandb
+from flwr.common.typing import NDArrays
 from omegaconf import DictConfig
-from collections import OrderedDict
 from peft import (
     LoraConfig,
     get_peft_model,
@@ -11,16 +16,16 @@ from peft import (
     set_peft_model_state_dict,
 )
 from peft.utils import prepare_model_for_kbit_training
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainerCallback
-
-from flwr.common.typing import NDArrays
+from thop import profile
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    TrainerCallback,
+)
 from transformers.trainer_callback import TrainerControl, TrainerState
 from transformers.training_args import TrainingArguments
-from thop import profile
-import wandb
-from typing import Dict, List
-import copy
-import time
+
 
 def cosine_annealing(
     current_round: int,
@@ -41,42 +46,43 @@ def get_model(model_cfg: DictConfig):
     https://github.com/huggingface/peft/blob/main/examples/fp4_finetuning/finetune_fp4_opt_bnb_peft.py
     """
     use_cuda = torch.cuda.is_available()
-    device_map = torch.device("cuda:0" if use_cuda else "cpu")
-    if model_cfg.quantization == 4:
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
-        )
-    elif model_cfg.quantization == 8:
-        quantization_config = BitsAndBytesConfig(load_in_8bit=True)
-    else:
-        raise ValueError(
-            f"Use 4-bit or 8-bit quantization. You passed: {model_cfg.quantization}/"
-        )
+    device_map = "cuda" if use_cuda else "cpu"
+    quantization_config = None
+    if model_cfg.enable_quantization:
+        if model_cfg.quantization == 4:
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch.bfloat16,
+            )
+        elif model_cfg.quantization == 8:
+            quantization_config = BitsAndBytesConfig(load_in_8bit=True)
+        else:
+            raise ValueError(
+                f"Use 4-bit or 8-bit quantization. You passed: {model_cfg.quantization}/"
+            )
 
     model = AutoModelForCausalLM.from_pretrained(
         model_cfg.name,
         quantization_config=quantization_config,
-        # torch_dtype=torch.bfloat16,
+        torch_dtype=torch.bfloat16,
         attn_implementation=(
             "flash_attention_2" if model_cfg.flash_attention else "eager"
         ),
     ).to(device_map)
-    
-    if use_cuda:
+
+    if use_cuda and model_cfg.enable_quantization:
         model = prepare_model_for_kbit_training(
             model, use_gradient_checkpointing=model_cfg.gradient_checkpointing
         )
-    
-    
+
     # Get tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
         model_cfg.name, use_fast=True, padding_side="right"
     )
     tokenizer.pad_token = tokenizer.eos_token
-    
+
     peft_config = LoraConfig(
         r=model_cfg.lora.lora_r,
         lora_alpha=model_cfg.lora.lora_alpha,
@@ -101,3 +107,4 @@ def get_parameters(model) -> NDArrays:
     """Return the parameters of the current net."""
     state_dict = get_peft_model_state_dict(model)
     return [val.cpu().numpy() for _, val in state_dict.items()]
+

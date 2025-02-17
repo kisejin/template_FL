@@ -7,6 +7,7 @@ from typing import Dict, Tuple
 import numpy as np
 import torch
 import wandb
+from accelerate import Accelerator
 from deepspeed.accelerator import get_accelerator
 from deepspeed.profiling.flops_profiler import get_model_profile
 from flwr.client import ClientApp, NumPyClient
@@ -14,6 +15,8 @@ from flwr.common import Context
 from flwr.common.config import unflatten_dict
 from flwr.common.typing import NDArrays, Scalar
 from omegaconf import DictConfig
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 from transformers import (
     DataCollatorForSeq2Seq,
     EarlyStoppingCallback,
@@ -111,8 +114,6 @@ class FlowerClient(NumPyClient):
         # instantiate model
         self.model, self.tokenizer = get_model(model_cfg)
 
-        for param in self.model.parameters():
-            param.requires_grad = True
         # (
         #     self.data_collator,
         #     self.formatting_prompts_func
@@ -129,10 +130,124 @@ class FlowerClient(NumPyClient):
 
         self._make_dataset()
 
-    def compute_metrics(self, pred):
-        labels_ids = pred.label_ids
+        self.train_loader = DataLoader(
+            self.trainset,
+            batch_size=self.training_arguments.per_device_train_batch_size,
+            shuffle=True,
+            num_workers=8,
+            collate_fn=self.data_collator,
+            drop_last=self.train_cfg.training_arguments.dataloader_drop_last,
+        )
+
+        self.val_loader = DataLoader(
+            self.valset,
+            batch_size=self.training_arguments.per_device_eval_batch_size,
+            shuffle=False,
+            num_workers=8,
+            collate_fn=self.data_collator,
+        )
+
+        # Initialize optimizer
+        self.optimizer = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=self.training_arguments.learning_rate,
+        )
+
+        # Initialize scheduler
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer,
+            T_max=self.num_rounds,
+        )
+
+        # Adding accelerator
+        self.accelerator = Accelerator()
+        self.device = self.accelerator.device
+        (
+            self.model,
+            self.optimizer,
+            self.scheduler,
+            self.train_loader,
+            self.val_loader,
+        ) = self.accelerator.prepare(
+            self.model,
+            self.optimizer,
+            self.scheduler,
+            self.train_loader,
+            self.val_loader,
+        )
+
+    def mytrain(self):
+        self.model.train()
+        total_loss = 0
+        for i, batch in tqdm(
+            enumerate(self.train_loader),
+            total=len(self.train_loader),
+            mininterval=self.train_cfg.training_arguments.logging_steps,
+            bar_format="{l_bar}{bar} {percentage:3.0f}% | {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
+        ):
+            batch = {k: v.to(self.device) for k, v in batch.items()}
+
+            # Forward pass
+            outputs = self.model(**batch)
+            loss = outputs.loss
+
+            # Backward pass
+            self.accelerator.backward(loss)
+
+            # Gradient accumulation if needed
+            if (
+                (i + 1)
+                % self.train_cfg.training_arguments.gradient_accumulation_steps
+                == 0
+            ):
+                self.optimizer.step()
+                self.scheduler.step()
+                self.optimizer.zero_grad()
+
+            total_loss += loss.item()
+            if (i + 1) % self.train_cfg.training_arguments.logging_steps == 0:
+                print(f"Batch {i}, Step {i+1}, Loss: {loss.item():.4f}")
+                wandb.log({"Train_loss": loss.item()})
+        wandb.log({"Total_train_loss": total_loss / len(self.train_loader)})
+        return total_loss / len(self.train_loader)
+
+    @torch.no_grad()
+    def myevaluate(self) -> Dict[str, float]:
+        """Evaluate model and return metrics."""
+        self.model.eval()
+        total_loss = 0.0
+        all_predictions, all_labels = [], []
+
+        for i, batch in tqdm(
+            enumerate(self.val_loader),
+            total=len(self.val_loader),
+            mininterval=self.train_cfg.training_arguments.logging_steps,
+            bar_format="{l_bar}{bar} {percentage:3.0f}% | {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
+        ):
+            batch = {k: v.to(self.device) for k, v in batch.items()}
+
+            outputs = self.model(**batch)
+            loss = outputs.loss
+
+            predictions = outputs.logits.argmax(dim=-1)
+
+            all_predictions.extend(predictions.cpu().numpy())
+            all_labels.extend(batch["labels"].cpu().numpy())
+
+            total_loss += loss.item()
+
+        metrics = self.compute_metrics(all_predictions, all_labels)
+        metrics["eval_loss"] = total_loss / len(self.val_loader)
+        wandb.log(metrics)
+        return metrics
+
+    def compute_metrics(self, predictions, labels):
+        labels_ids = labels
         labels_ids[labels_ids == -100] = 1829
-        pred_ids = np.argmax(pred.predictions, axis=-1)
+        print("labels_ids", labels_ids)
+        print("predictions", predictions)
+        # pred_ids = np.argmax(predictions, axis=-1)
+        pred_ids = predictions
         # all unnecessary tokens are removed
         pred_str = self.tokenizer.batch_decode(
             pred_ids, skip_special_tokens=True
@@ -174,6 +289,7 @@ class FlowerClient(NumPyClient):
         """Implement distributed fit function for a given client."""
         set_parameters(self.model, parameters)
 
+        # Update learning rate cosine annealing
         new_lr = cosine_annealing(
             int(config["current_round"]),
             self.num_rounds,
@@ -181,46 +297,26 @@ class FlowerClient(NumPyClient):
             self.train_cfg.learning_rate_min,
         )
 
-        self.training_arguments.learning_rate = new_lr
+        for param_group in self.optimizer.param_groups:
+            param_group["lr"] = new_lr
+
+        # Training loop
         self.training_arguments.output_dir = config["save_path"]
 
-        # Initialize callback
-        early_stopping_callback = EarlyStoppingCallback(
-            early_stopping_patience=5
-        )
-
-        # Construct supervised trainer
-        # trainer = SFTTrainer(
-        #     model=self.model,
-        #     tokenizer=self.tokenizer,
-        #     args=self.training_arguments,
-        #     train_dataset=self.trainset,
-        #     eval_dataset=self.valset,
-        #     formatting_func=self.formatting_prompts_func,
-        #     data_collator=self.data_collator,
-        #     compute_metrics=self.compute_metrics,
-        #     callbacks=[flops_callback, early_stopping_callback]
-        # )
-
-        # Constuct baseline Trainer
-        trainer = Trainer(
-            model=self.model,
-            train_dataset=self.trainset,
-            eval_dataset=self.valset.select(range(10)),
-            # eval_dataset=self.valset,
-            args=self.training_arguments,
-            data_collator=self.data_collator,
-            compute_metrics=self.compute_metrics,
-            # callbacks=[early_stopping_callback],
-        )
-
         # Do local training
+        num_epochs = self.train_cfg.training_arguments.num_train_epochs
+        train_loss = 0.0
         print("Training...")
-        train_results = trainer.train()
+        for epoch in range(int(num_epochs)):
+            train_loss = self.mytrain()
+            print(f"Epoch {epoch}, Train_loss: {train_loss:.4f}")
+            wandb.log({"Train_loss": train_loss})
 
         # Do local evaluation
         print("Evaluating...")
-        eval_results = trainer.evaluate()
+        eval_results = self.myevaluate()
+        wandb.log(eval_results)
+        print(f"Evaluation metrics: {eval_results:.4f}")
 
         # Calculate FLOPs
         with get_accelerator().device("cuda"):
@@ -243,17 +339,17 @@ class FlowerClient(NumPyClient):
                 }
             )  # wa
 
-        prefix = "eval"
         results_metrics = {
-            "train_loss": train_results.training_loss,
-            "eval_loss": eval_results[f"{prefix}_loss"],
+            "train_loss": train_loss,
+            "eval_loss": eval_results["loss"],
             "total_flops": flops_value,
-            "eval_f1": eval_results[f"{prefix}_f1"],
-            "eval_rouge1": eval_results[f"{prefix}_rouge1"],
-            "eval_rouge2": eval_results[f"{prefix}_rouge2"],
-            "eval_rougeL": eval_results[f"{prefix}_rougeL"],
-            "eval_rougeLsum": eval_results[f"{prefix}_rougeLsum"],
+            "eval_f1": eval_results["f1"],
+            "eval_rouge1": eval_results["rouge1"],
+            "eval_rouge2": eval_results["rouge2"],
+            "eval_rougeL": eval_results["rougeL"],
+            "eval_rougeLsum": eval_results["rougeLsum"],
         }
+
         # Save client metrics
         save_client_metrics(
             client_id=self.id,
@@ -265,7 +361,7 @@ class FlowerClient(NumPyClient):
         return (
             get_parameters(self.model),
             len(self.trainset),
-            {"train_loss": train_results.training_loss, "flops": flops_value},
+            {"train_loss": train_loss, "flops": flops_value},
         )
 
 

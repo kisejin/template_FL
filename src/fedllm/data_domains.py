@@ -244,7 +244,7 @@ class CodeDataset(DatasetAbstract):
             {self.metadata['domain']: global_test}
         )
 
-def release_ds(downsample_rate=1.0):
+def release_ds(downsample_rate=0.5):
     """
     Release the client_id_dataset with an optional downsample rate.
     

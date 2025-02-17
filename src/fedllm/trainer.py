@@ -381,6 +381,7 @@ class ManualTrainer:
         # print(f"Selection fraction: {selection_fraction}")
         selection_size = int(len(influence_scores) * selection_fraction)
         selection_size = max(1, selection_size)  # Ensure at least one sample is selected
+        selection_size = min(selection_size, len(influence_scores) - 1)  # Ensure selection_size is within bounds
         # print(f"List influence score: {influence_scores}, length: {len(influence_scores)}")
         # print(f"Selection size: {selection_size}")
         high_quality_indices = np.argpartition(influence_scores, selection_size)[:selection_size]

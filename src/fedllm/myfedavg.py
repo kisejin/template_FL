@@ -19,7 +19,8 @@ Paper: arxiv.org/abs/1602.05629
 
 
 from logging import WARNING
-from typing import Callable, Optional, Union
+from typing import Callable, Optional, Union, List
+import random
 
 from flwr.common import (
     EvaluateIns,
@@ -112,6 +113,7 @@ class FedAvg(Strategy):
         evaluate_metrics_aggregation_fn: Optional[MetricsAggregationFn] = None,
         inplace: bool = True,
         use_mates: bool = False,
+        rseed: Optional[List[int]] = None,
     ) -> None:
         super().__init__()
 
@@ -135,6 +137,7 @@ class FedAvg(Strategy):
         self.evaluate_metrics_aggregation_fn = evaluate_metrics_aggregation_fn
         self.inplace = inplace
         self.use_mates = use_mates
+        self.rseed = rseed
 
     def __repr__(self) -> str:
         """Compute a string representation of the strategy."""
@@ -192,6 +195,10 @@ class FedAvg(Strategy):
         sample_size, min_num_clients = self.num_fit_clients(
             client_manager.num_available()
         )
+        
+        # Set random seed for reproducibility
+        random.seed(self.rseed[server_round - 1])
+        
         clients = client_manager.sample(
             num_clients=sample_size, min_num_clients=min_num_clients
         )

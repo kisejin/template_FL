@@ -398,6 +398,9 @@ def server_fn(context: Context):
     init_model, tokenizer = get_model(cfg.model)
     init_model_parameters = get_parameters(init_model)
     init_model_parameters = ndarrays_to_parameters(init_model_parameters)
+    
+    # Get list random seed
+    rseed = [int(v) for v in cfg.random_seed.split(",")]
 
     # Define strategy
     strategy = FedAvg(
@@ -410,7 +413,8 @@ def server_fn(context: Context):
         evaluate_fn=get_evaluate_fn(
             cfg.train, cfg.model, cfg.dataset, cfg.train.save_every_round, num_rounds, num_nodes, save_path, cfg.mates, cfg.skipbert
         ),
-        use_mates=cfg.mates.state
+        use_mates=cfg.mates.state,
+        rseed=rseed
     )
     config = ServerConfig(num_rounds=num_rounds)
 

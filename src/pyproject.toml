@@ -35,6 +35,7 @@ clientapp = "fedllm.client_app:app"
 [tool.flwr.app.config]
 num-server-rounds = 10
 num-supernodes = 10
+random-seed = "17,42,67,89,103,128,149,167,182,197" 
 
 # Define dataset
 dataset.type = 'hete' # type = ['homo','hete']
@@ -45,6 +46,7 @@ model.name = "HuggingFaceTB/SmolLM-360M-Instruct" # "Qwen/Qwen2.5-1.5B-Instruct"
 model.quantization = -1
 model.gradient-checkpointing = true
 model.flash_attention = false
+
 
 # Use MATES
 mates.state = true

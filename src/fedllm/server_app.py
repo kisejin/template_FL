@@ -186,8 +186,8 @@ class LLMSampleCB(WandbCallback):
 def test_model(dataset, model, tokenizer, train_cfg, tmp_dict, sround, mates_args, skipbert_args, task):
     
     wandb.init(
-        project='FL@CSS25',
-        name=f'skipbert_global_eval_round_{sround}',
+        project='FL@CSS25_skipbert_mates',
+        name=f'skipbert_mates_global_eval_round_{sround}',
         id=f"round_{sround}",
         resume="allow",
         reinit=True,

@@ -404,6 +404,6 @@ def client_fn(context: Context) -> FlowerClient:
 app = ClientApp(
     client_fn,
     mods=[
-        get_wandb_mod("FL@CSS25"),
+        get_wandb_mod("FL@CSS25_skipbert_mates"),
     ],
 )

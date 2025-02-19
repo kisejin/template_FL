@@ -1,20 +1,23 @@
-from trl import DataCollatorForCompletionOnlyLM
-
-from flwr_datasets.partitioner import IidPartitioner
-from flwr_datasets import FederatedDataset
-from datasets import Dataset, DatasetDict
-from sklearn.model_selection import train_test_split
 import pandas as pd
-
+from datasets import Dataset, DatasetDict
+from flwr_datasets import FederatedDataset
+from flwr_datasets.partitioner import IidPartitioner
+from sklearn.model_selection import train_test_split
+from trl import DataCollatorForCompletionOnlyLM
 
 FDS = None  # Cache FederatedDataset
 client_id_ds = None
 global_test_set_homo = None
 
+
 def split_train_test(dataset, test_size):
     # Split the dataset into train and test sets
-    train_data, test_data = train_test_split(dataset.to_pandas(), test_size=test_size, shuffle=True, random_state=42)
-    test_data, global_test = train_test_split(test_data, test_size=0.1, shuffle=True, random_state=42)
+    train_data, test_data = train_test_split(
+        dataset.to_pandas(), test_size=test_size, shuffle=True, random_state=42
+    )
+    test_data, global_test = train_test_split(
+        test_data, test_size=0.1, shuffle=True, random_state=42
+    )
 
     # Convert to Dataset objects
     train_dataset = Dataset.from_pandas(train_data)
@@ -22,12 +25,8 @@ def split_train_test(dataset, test_size):
     global_test = Dataset.from_pandas(global_test)
 
     # Combine into a DatasetDict
-    datasets_dict = DatasetDict({
-        'train': train_dataset,
-        'test': test_dataset
-    })
+    datasets_dict = DatasetDict({"train": train_dataset, "test": test_dataset})
     return datasets_dict
-
 
 
 def formatting_prompts_func(example):
@@ -69,6 +68,7 @@ def load_data(partition_id: int, num_partitions: int, dataset_name: str):
     print(client_trainset)
     return client_trainset
 
+
 def load_data_homo(partition_id: int, num_partitions: int, dataset_name: str):
     """Load partition data."""
     # Only initialize `FederatedDataset` once
@@ -91,7 +91,7 @@ def load_data_homo(partition_id: int, num_partitions: int, dataset_name: str):
         #         list_ds, test_size=0.1, shuffle=True, random_state=42
         # )
         # global_test_set_homo = Dataset.from_pandas(global_test_set_homo).remove_columns(['__index_level_0__'])
-                    
+
     print(f"<---- Load client {partition_id} --->")
     client_trainset = FDS.load_partition(partition_id, "train")
     # client_trainset = client_trainset.rename_column("output", "response")
@@ -104,8 +104,8 @@ def load_data_hete(partition_id: int):
     global client_id_ds
     if client_id_ds is None:
         from .data_domains import client_id_dataset
+
         client_id_ds = client_id_dataset
-    print(client_id_ds)
     print(f"<---- Load client {partition_id} --->")
     client_set = client_id_ds[str(partition_id)]
     return client_set

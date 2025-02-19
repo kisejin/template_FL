@@ -8,8 +8,18 @@ mkdir -p logs/$datetime
 start_time=$(date +%s)
 start_time_formatted=$(date '+%Y-%m-%d %H:%M:%S')
 
+# Determine the path to the flwr package
+flwr_path=$(python -c "import flwr; print(flwr.__file__)")
+flwr_common_message_path=$(dirname $flwr_path)/common/message.py
+
+# Change DEFAULT_TTL in the determined Python file
+sed -i 's/DEFAULT_TTL = [0-9]\+/DEFAULT_TTL = 360000/' $flwr_common_message_path
+
 # Run the command and save output and error logs
-CUDA_VISIBLE_DEVICES=0 flwr run . > logs/$datetime/output.log 2> logs/$datetime/error.log
+# Modify pyproject.toml to set mates.state to false
+sed -i 's/^\(mates\.state\s*=\s*\).*/\1true/' pyproject.toml
+
+CUDA_VISIBLE_DEVICES=2 flwr run . > logs/$datetime/output.log 2> logs/$datetime/error.log
 
 # Record end time
 end_time=$(date +%s)

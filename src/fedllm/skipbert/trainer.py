@@ -1,38 +1,33 @@
-from accelerate import Accelerator
-from torch.utils.data import DataLoader
-import torch
-from torch import nn
-from torch.nn import MSELoss, CrossEntropyLoss
 import copy
+import logging
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
 import numpy as np
-from transformers import (
-    # BertForSequenceClassification, 
-    GenerationConfig, 
-    AutoTokenizer,
-    Trainer,
-    get_scheduler, 
-    EarlyStoppingCallback,
-    TrainingArguments
-)
-from transformers.trainer_utils import (
-    EvaluationStrategy,
-    IntervalStrategy,
-)
-from transformers.trainer_pt_utils import nested_detach
-from transformers.utils import is_sagemaker_mp_enabled
-from transformers.training_args import OptimizerNames
-from typing import Dict, List, Optional, Any, Union, Tuple, Callable
-import numpy as np
-from torch.utils.data import Dataset, DataLoader
+import torch
+import wandb
+from accelerate import Accelerator
 from accelerate.utils import (
-        AutocastKwargs,
-        DistributedDataParallelKwargs,
-        DistributedType,
-    )
+    AutocastKwargs,
+    DistributedDataParallelKwargs,
+    DistributedType,
+)
 from datasets import Dataset
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
-import wandb
-import logging
+from torch import nn
+from torch.nn import CrossEntropyLoss, MSELoss
+from torch.utils.data import DataLoader, Dataset
+from transformers import (  # BertForSequenceClassification,
+    AutoTokenizer,
+    EarlyStoppingCallback,
+    GenerationConfig,
+    Trainer,
+    TrainingArguments,
+    get_scheduler,
+)
+from transformers.trainer_pt_utils import nested_detach
+from transformers.trainer_utils import EvaluationStrategy, IntervalStrategy
+from transformers.training_args import OptimizerNames
+from transformers.utils import is_sagemaker_mp_enabled
 
 logging.getLogger("Trainer").setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,41 +38,42 @@ def compute_metrics_skipbert(pred):
     Compute metrics for model evaluation
     """
     labels = pred.label_ids
-    
+
     preds = pred.predictions
-    
+
     if len(preds[0]) >= 2:
         preds = torch.tensor(preds.argmax(-1))
         labels = torch.tensor(labels)
-        
+
         acc = accuracy_score(labels, preds)
-        precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='binary')
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            labels, preds, average="binary"
+        )
         return {
-            'accuracy': acc,
-            'f1': f1,
-            'precision': precision,
-            'recall': recall
+            "accuracy": acc,
+            "f1": f1,
+            "precision": precision,
+            "recall": recall,
         }
     else:
         labels = torch.tensor(pred.label_ids[:, np.newaxis])
         preds = torch.tensor(pred.predictions)
-        
+
         # MSE
         mse = nn.MSELoss()
         mse_loss = mse(labels, preds)
 
-        #RMSE
+        # RMSE
         rmse = torch.sqrt(mse_loss)
 
         # MAE
         mae = nn.L1Loss()
         mae_loss = mae(labels, preds)
 
-
         return {
-            'mse': mse_loss,
-            'rmse': rmse,
-            'mae': mae_loss,
+            "mse": mse_loss,
+            "rmse": rmse,
+            "mae": mae_loss,
         }
 
 
@@ -103,7 +99,7 @@ class SkipBertTrainer(Trainer):
         hid_layer_maps: Optional[List[int]] = None,
         epochs_no_cls: int = 0,
         reduce_T: int = 1,
-        output_mode: str = 'classification',
+        output_mode: str = "classification",
         num_masked_layers_teacher: int = 0,
         num_masked_last_layers_teacher: int = 0,
         fp16: bool = False,
@@ -112,7 +108,7 @@ class SkipBertTrainer(Trainer):
     ):
         """
         Initialize SkipBERT Trainer with knowledge distillation capabilities.
-        
+
         Args:
             student_model: The student model to be trained
             teacher_model: The teacher model for knowledge distillation
@@ -134,12 +130,11 @@ class SkipBertTrainer(Trainer):
                 num_train_epochs=3,
                 per_device_train_batch_size=2,
                 per_device_eval_batch_size=2,
-                logging_dir='./logs',
+                logging_dir="./logs",
                 evaluation_strategy=EvaluationStrategy.EPOCH,
                 save_strategy=IntervalStrategy.EPOCH,
             )
-        
-        
+
         # Call parent constructor
         super().__init__(
             model=student_model,
@@ -148,9 +143,9 @@ class SkipBertTrainer(Trainer):
             eval_dataset=eval_dataset,
             data_collator=data_collator,
             compute_metrics=compute_metrics,
-            **kwargs
+            **kwargs,
         )
-        
+
         # Store additional knowledge distillation parameters
         self.teacher_model = teacher_model
         self.alpha = alpha
@@ -174,7 +169,7 @@ class SkipBertTrainer(Trainer):
         self.list_att_loss = []
         self.list_rep_loss = []
         self.list_embed_loss = []
-      
+
         # Prepare FP16 if enabled
         self.fp16 = fp16
         if fp16:
@@ -184,63 +179,72 @@ class SkipBertTrainer(Trainer):
                 raise ImportError(
                     "Please install apex from https://www.github.com/nvidia/apex to use distributed and fp16 training."
                 )
-            
+
             # Initialize amp
             self.model, self.optimizer = amp.initialize(
-                self.model, 
-                self.optimizer, 
-                opt_level='01'
+                self.model, self.optimizer, opt_level="01"
             )
-            
+
             # Half precision for teacher model if exists
             if self.teacher_model is not None:
                 self.teacher_model = self.teacher_model.half()
-        
+
         # Loss functions
         self.loss_mse = MSELoss()
-    
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+
+    def compute_loss(
+        self, model, inputs, return_outputs=False, num_items_in_batch=None
+    ):
         """
         How the loss is computed by Trainer. By default, all models return the loss in the first element.
 
         Subclass and override for custom behavior.
         """
-        
+
         # Separate labels from inputs
         labels = inputs.pop("labels")
-        
+
         if self.model_accepts_loss_kwargs:
             loss_kwargs = {}
             if num_items_in_batch is not None:
                 loss_kwargs["num_items_in_batch"] = num_items_in_batch
             inputs = {**inputs, **loss_kwargs}
-        
+
         # Forward pass through student model
         student_logits, student_atts, student_reps = model(**inputs)
-        student_reps = student_reps[-self.num_full_hidden_layers_student-1:]
+        student_reps = student_reps[-self.num_full_hidden_layers_student - 1 :]
 
         # Forward pass through teacher model
         self.teacher_model.eval()
         with torch.no_grad():
             # teacher_logits, teacher_atts, teacher_reps = self.teacher_model(**inputs)
-            teacher_outputs = self.teacher_model(**inputs, output_hidden_states=True, output_attentions=True)
-            teacher_logits, teacher_atts, teacher_reps = teacher_outputs.logits, teacher_outputs.attentions, teacher_outputs.hidden_states
-            start, end = self.num_masked_layers_teacher, -1 * self.num_masked_layers_teacher if self.num_masked_layers_teacher != 0 else None
+            teacher_outputs = self.teacher_model(
+                **inputs, output_hidden_states=True, output_attentions=True
+            )
+            teacher_logits, teacher_atts, teacher_reps = (
+                teacher_outputs.logits,
+                teacher_outputs.attentions,
+                teacher_outputs.hidden_states,
+            )
+            start, end = self.num_masked_layers_teacher, (
+                -1 * self.num_masked_layers_teacher
+                if self.num_masked_layers_teacher != 0
+                else None
+            )
             teacher_reps = teacher_reps[start:end]
-            
+
         # Save past state if it exists
         # TODO: this needs to be fixed and made cleaner later.
         if self.args.past_index >= 0:
             self._past = student_outputs[self.args.past_index]
-            
+
         # Compute losses
-        att_loss, rep_loss = 0., 0.
-        
+        att_loss, rep_loss = 0.0, 0.0
+
         # ---------------------------
         if labels is not None:
-            
-            
-            # --------------------------- 
+
+            # ---------------------------
             if self.att_layer_maps is None:
                 teacher_layer_num = len(teacher_atts)
                 student_layer_num = len(student_atts)
@@ -268,13 +272,13 @@ class SkipBertTrainer(Trainer):
                 student_att = torch.where(
                     student_att <= 1e-2,
                     torch.zeros_like(student_att),
-                    student_att
+                    student_att,
                 )
 
                 teacher_att = torch.where(
                     teacher_att <= 1e-2,
                     torch.zeros_like(teacher_att),
-                    teacher_att
+                    teacher_att,
                 )
 
                 att_loss += self.loss_mse(student_att, teacher_att)
@@ -302,7 +306,9 @@ class SkipBertTrainer(Trainer):
 
             # ---------------------------
 
-            for student_rep, teacher_rep in zip(new_student_reps, new_teacher_reps):
+            for student_rep, teacher_rep in zip(
+                new_student_reps, new_teacher_reps
+            ):
                 if teacher_rep is None:
                     continue
                 tmp_loss = self.loss_mse(student_rep, teacher_rep)
@@ -314,39 +320,48 @@ class SkipBertTrainer(Trainer):
             # ---------------------------
             embedding_loss = 0
             if self.use_embedding:
-                embedding_loss = self.loss_mse(
-                    student_reps[0], teacher_reps[0]
-                )
+                embedding_loss = self.loss_mse(student_reps[0], teacher_reps[0])
 
             # ---------------------------
 
             # ---------------------------
 
             if self.use_logits and self.state.epoch >= self.epochs_no_cls:
-                if isinstance(student_logits, tuple) or \
-                    isinstance(student_logits, list):
+                if isinstance(student_logits, tuple) or isinstance(
+                    student_logits, list
+                ):
                     cls_loss = None
-                    _scale = 0.
+                    _scale = 0.0
                     for il, logits in enumerate(student_logits):
                         _loss, _, _ = self._compute_distillation_loss(
-                            student_logits, student_atts, student_reps,
-                            teacher_logits, teacher_atts, teacher_reps,
-                            labels
+                            student_logits,
+                            student_atts,
+                            student_reps,
+                            teacher_logits,
+                            teacher_atts,
+                            teacher_reps,
+                            labels,
                         )
                         if cls_loss is None:
                             cls_loss = _loss
                         else:
-                            cls_loss = _loss * (il + 1.) + cls_loss
+                            cls_loss = _loss * (il + 1.0) + cls_loss
                         _scale += il + 1
 
-                    cls_loss = cls_loss * (1. / _scale)
+                    cls_loss = cls_loss * (1.0 / _scale)
 
                 else:
-                    cls_loss, kd_loss, ce_loss = self._compute_distillation_loss(
-                            student_logits, student_atts, student_reps,
-                            teacher_logits, teacher_atts, teacher_reps,
-                            labels
+                    cls_loss, kd_loss, ce_loss = (
+                        self._compute_distillation_loss(
+                            student_logits,
+                            student_atts,
+                            student_reps,
+                            teacher_logits,
+                            teacher_atts,
+                            teacher_reps,
+                            labels,
                         )
+                    )
                 self.tr_cls_loss += cls_loss.item()
 
             else:
@@ -354,16 +369,16 @@ class SkipBertTrainer(Trainer):
 
             # ---------------------------
 
-
             check = self.state.epoch >= self.epochs_no_cls
-            self.beta = self.beta * check + (1 - check) * 1.
+            self.beta = self.beta * check + (1 - check) * 1.0
 
             # ---------------------------
 
-            if self.use_embedding and \
-                 self.use_att and \
-                 self.use_rep:
-                loss = self.beta * (rep_loss + att_loss + embedding_loss) + cls_loss
+            if self.use_embedding and self.use_att and self.use_rep:
+                loss = (
+                    self.beta * (rep_loss + att_loss + embedding_loss)
+                    + cls_loss
+                )
 
             elif self.use_att and self.use_rep:
                 loss = self.beta * (rep_loss + att_loss) + cls_loss
@@ -374,22 +389,17 @@ class SkipBertTrainer(Trainer):
             elif self.use_embedding and self.use_rep:
                 loss = self.beta * (rep_loss + embedding_loss) + cls_loss
 
-            elif self.use_att and \
-                not self.use_embedding and \
-                not self.use_rep:
+            elif self.use_att and not self.use_embedding and not self.use_rep:
                 loss = self.beta * att_loss + cls_loss
 
-            elif self.use_rep and \
-                not self.use_embedding and \
-                not self.use_att:
+            elif self.use_rep and not self.use_embedding and not self.use_att:
                 loss = self.beta * rep_loss + cls_loss
 
             else:
                 loss = cls_loss
-                
-        
-            # --------------------------- 
-        
+
+            # ---------------------------
+
         else:
             if isinstance(outputs, dict) and "loss" not in outputs:
                 raise ValueError(
@@ -398,11 +408,14 @@ class SkipBertTrainer(Trainer):
                 )
             # We don't use .loss here since the model may return tuples instead of ModelOutput.
             loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
-        
+
         # ---------------------------
-        
+
         # ---------------------------
-        if self.args.average_tokens_across_devices and self.model_accepts_loss_kwargs:
+        if (
+            self.args.average_tokens_across_devices
+            and self.model_accepts_loss_kwargs
+        ):
             loss *= self.accelerator.num_processes
             rep_loss *= self.accelerator.num_processes
             att_loss *= self.accelerator.num_processes
@@ -411,10 +424,9 @@ class SkipBertTrainer(Trainer):
             self.list_rep_loss.append(rep_loss.item())
             self.list_embed_loss.append(embedding_loss.item())
         # ---------------------------
-        
-        
+
         # ---------------------------
-        
+
         # Ensure logits are properly formatted for evaluation metrics
         logits = student_logits
         if return_outputs:
@@ -430,61 +442,84 @@ class SkipBertTrainer(Trainer):
 
             # Ensure we have [batch_size, num_classes] shape
             if len(logits.shape) != 2:
-                raise ValueError(f"Unexpected logits shape: {logits.shape}. Expected [batch_size, num_classes]")
-            
-            if self.output_mode == "classification": # Classification
-                loss = nn.functional.cross_entropy(labels.view(-1), logits.view(-1, len(logits[0])), reduction="mean")
-            
+                raise ValueError(
+                    f"Unexpected logits shape: {logits.shape}. Expected [batch_size, num_classes]"
+                )
+
+            if self.output_mode == "classification":  # Classification
+                loss = nn.functional.cross_entropy(
+                    labels.view(-1),
+                    logits.view(-1, len(logits[0])),
+                    reduction="mean",
+                )
+
             elif self.output_mode == "regression":  # Regression
                 # print(f"Return output -  student: {nn.functional.softmax(student_logits, dim=0).view(-1)}, labels: {labels.view(-1)}")
                 loss = self.loss_mse(labels.view(-1), logits.view(-1))
 
-            
         # ---------------------------
         # print(f"loss: {loss}, att_loss: {att_loss}, rep_loss: {rep_loss}, embed_loss: {embedding_loss}, Train {return_outputs}")
         return (loss, logits) if return_outputs else loss
 
     def _compute_distillation_loss(
-        self, 
-        student_logits, student_atts, student_reps,
-        teacher_logits, teacher_atts, teacher_reps,
-        labels
+        self,
+        student_logits,
+        student_atts,
+        student_reps,
+        teacher_logits,
+        teacher_atts,
+        teacher_reps,
+        labels,
     ):
         """
         Compute comprehensive knowledge distillation loss.
-        
+
         Args:
             student_*: Student model's outputs
             teacher_*: Teacher model's outputs
             labels: Ground truth labels
-        
+
         Returns:
             Computed loss
         """
 
         # Classification/distillation loss
-        if self.output_mode == "classification": # Classification
+        if self.output_mode == "classification":  # Classification
             # Similar to previous implementation's distillation loss
             if teacher_logits is not None:
-                student_likelihood = nn.functional.log_softmax(student_logits / self.temperature, dim=-1)
-                targets_prob = nn.functional.softmax(teacher_logits / self.temperature, dim=-1)
-                d_loss = (-targets_prob * student_likelihood).mean() * (self.temperature ** 2) / self.reduce_T
+                student_likelihood = nn.functional.log_softmax(
+                    student_logits / self.temperature, dim=-1
+                )
+                targets_prob = nn.functional.softmax(
+                    teacher_logits / self.temperature, dim=-1
+                )
+                d_loss = (
+                    (-targets_prob * student_likelihood).mean()
+                    * (self.temperature**2)
+                    / self.reduce_T
+                )
             else:
                 d_loss = 0
-        # Standard cross-entropy/MSE loss
-            nll_loss = nn.functional.cross_entropy(student_logits, labels, reduction="mean")
-            
+            # Standard cross-entropy/MSE loss
+            nll_loss = nn.functional.cross_entropy(
+                student_logits, labels, reduction="mean"
+            )
+
         elif self.output_mode == "regression":  # Regression
             # student_likelihood = nn.functional.softmax(student_logits, dim=0)
             # teacher_likelihood = nn.functional.softmax(teacher_logits, dim=0)
             student_likelihood = torch.tensor(student_logits)
             teacher_likelihood = torch.tensor(teacher_logits)
-            d_loss = self.loss_mse(student_likelihood.view(-1), teacher_likelihood.view(-1))
-            nll_loss = self.loss_mse(teacher_likelihood.view(-1), labels.view(-1))
+            d_loss = self.loss_mse(
+                student_likelihood.view(-1), teacher_likelihood.view(-1)
+            )
+            nll_loss = self.loss_mse(
+                teacher_likelihood.view(-1), labels.view(-1)
+            )
         else:
             assert output_mode in ["classification", "regression"]
-            d_loss = 0.
-            nll_loss = 0.
+            d_loss = 0.0
+            nll_loss = 0.0
         tol_loss = self.alpha * d_loss + (1 - self.alpha) * nll_loss
         return tol_loss, d_loss, nll_loss
 
@@ -493,11 +528,11 @@ class SkipBertTrainer(Trainer):
         resume_from_checkpoint: Optional[str] = None,
         trial: Optional[Dict[str, Any]] = None,
         ignore_keys_for_eval: Optional[List[str]] = None,
-        **kwargs
+        **kwargs,
     ):
         """
         Train method with explicit configuration for knowledge distillation training.
-        
+
         Args:
             resume_from_checkpoint: Optional checkpoint to resume training
             trial: Optional hyperparameter trial configuration
@@ -513,10 +548,14 @@ class SkipBertTrainer(Trainer):
             resume_from_checkpoint=resume_from_checkpoint,
             trial=trial,
             ignore_keys_for_eval=ignore_keys_for_eval,
-            **kwargs
+            **kwargs,
         )
+
     def training_step(
-        self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]], num_items_in_batch=None
+        self,
+        model: nn.Module,
+        inputs: Dict[str, Union[torch.Tensor, Any]],
+        num_items_in_batch=None,
     ) -> torch.Tensor:
         """
         Perform a training step on a batch of inputs.
@@ -540,13 +579,21 @@ class SkipBertTrainer(Trainer):
             self.optimizer.train()
 
         inputs = self._prepare_inputs(inputs)
+
+        for param in model.parameters():
+            param.requires_grad = True
+
         if is_sagemaker_mp_enabled():
-            loss_mb = smp_forward_backward(model, inputs, self.args.gradient_accumulation_steps)
+            loss_mb = smp_forward_backward(
+                model, inputs, self.args.gradient_accumulation_steps
+            )
             return loss_mb.reduce_mean().detach().to(self.args.device)
 
         with self.compute_loss_context_manager():
-            loss = self.compute_loss(model, inputs, num_items_in_batch=num_items_in_batch)
-            
+            loss = self.compute_loss(
+                model, inputs, num_items_in_batch=num_items_in_batch
+            )
+
         del inputs
         if (
             self.args.torch_empty_cache_steps is not None
@@ -572,21 +619,29 @@ class SkipBertTrainer(Trainer):
             kwargs["learning_rate"] = self._get_learning_rate()
 
         if self.args.n_gpu > 1:
-            loss = loss.mean()  # mean() to average on multi-gpu parallel training
+            loss = (
+                loss.mean()
+            )  # mean() to average on multi-gpu parallel training
 
         if self.use_apex:
             with amp.scale_loss(loss, self.optimizer) as scaled_loss:
                 # scaled_loss.requires_grad = True
                 scaled_loss.backward()
-            
-            if (self.state.global_step + 1) % self.args.gradient_accumulation_steps == 0:
-                nn.utils.clip_grad_norm_(amp.master_params(self.optimizer[0]), 1.0)
-            
-            
+
+            if (
+                self.state.global_step + 1
+            ) % self.args.gradient_accumulation_steps == 0:
+                nn.utils.clip_grad_norm_(
+                    amp.master_params(self.optimizer[0]), 1.0
+                )
+
         else:
             # Finally we need to normalize the loss for reporting
             # loss.requires_grad = True
-            if not self.model_accepts_loss_kwargs and self.compute_loss_func is None:
+            if (
+                not self.model_accepts_loss_kwargs
+                and self.compute_loss_func is None
+            ):
                 loss = loss / self.args.gradient_accumulation_steps
 
             # Turning off loss scaling w.r.t. gradient accumulation when DeepSpeed is enabled
@@ -595,8 +650,10 @@ class SkipBertTrainer(Trainer):
                 kwargs["scale_wrt_gas"] = False
 
             self.accelerator.backward(loss, **kwargs)
-            
-            if (self.state.global_step + 1) % self.args.gradient_accumulation_steps == 0:
+
+            if (
+                self.state.global_step + 1
+            ) % self.args.gradient_accumulation_steps == 0:
                 # nn.utils.clip_grad_norm_(student_model.parameters(), 1.0)
                 nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
 
@@ -607,16 +664,16 @@ class SkipBertTrainer(Trainer):
         eval_dataset: Optional[Dataset] = None,
         ignore_keys: Optional[List[str]] = None,
         metric_key_prefix: str = "eval",
-        **kwargs
+        **kwargs,
     ) -> Dict[str, float]:
         """
         Evaluation method with custom metrics computation.
-        
+
         Args:
             eval_dataset: Optional evaluation dataset
             ignore_keys: Keys to ignore during evaluation
             metric_key_prefix: Prefix for metrics
-        
+
         Returns:
             Dictionary of evaluation metrics
         """
@@ -625,44 +682,57 @@ class SkipBertTrainer(Trainer):
             eval_dataset=eval_dataset,
             ignore_keys=ignore_keys,
             metric_key_prefix=metric_key_prefix,
-            **kwargs
+            **kwargs,
         )
-    
+
     def prediction_step(
         self,
         model: nn.Module,
         inputs: Dict[str, Union[torch.Tensor, Any]],
         prediction_loss_only: bool,
         ignore_keys: Optional[List[str]] = None,
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+    ) -> Tuple[
+        Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]
+    ]:
         """
         Override prediction step to handle the model's output format correctly.
         """
-        has_labels = False if len(self.label_names) == 0 else all(inputs.get(k) is not None for k in self.label_names)
-        
+        has_labels = (
+            False
+            if len(self.label_names) == 0
+            else all(inputs.get(k) is not None for k in self.label_names)
+        )
+
         return_loss = inputs.get("return_loss", None)
         if return_loss is None:
             return_loss = self.can_return_loss
-        loss_without_labels = True if len(self.label_names) == 0 and return_loss else False
-        
+        loss_without_labels = (
+            True if len(self.label_names) == 0 and return_loss else False
+        )
 
         inputs = self._prepare_inputs(inputs)
         if ignore_keys is None:
             if hasattr(self.model, "config"):
-                ignore_keys = getattr(self.model.config, "keys_to_ignore_at_inference", [])
+                ignore_keys = getattr(
+                    self.model.config, "keys_to_ignore_at_inference", []
+                )
             else:
                 ignore_keys = []
-                
+
         # labels may be popped when computing the loss (label smoothing for instance) so we grab them first.
         if has_labels or loss_without_labels:
-            labels = nested_detach(tuple(inputs.get(name) for name in self.label_names))
+            labels = nested_detach(
+                tuple(inputs.get(name) for name in self.label_names)
+            )
             if len(labels) == 1:
                 labels = labels[0]
         else:
             labels = None
-        
+
         with torch.no_grad():
-            loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
+            loss, outputs = self.compute_loss(
+                model, inputs, return_outputs=True
+            )
             loss = loss.mean().detach()
 
             # Get logits from outputs
@@ -671,18 +741,17 @@ class SkipBertTrainer(Trainer):
             else:
                 # logits = outputs[0]
                 logits = outputs
-            
-            
+
             # Ensure logits has correct shape [batch_size, num_classes]
             if len(logits.shape) == 1:
                 logits = logits.unsqueeze(0)
 
         if prediction_loss_only:
             return (loss, None, None)
-        
+
         if labels is not None:
             labels = labels.detach()
-        
+
         logits = nested_detach(logits)
         if len(logits.shape) == 1:
             logits = logits[0]

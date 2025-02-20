@@ -41,8 +41,8 @@ from .myfedavg import FedAvg
 from .trainer import ManualTrainer
 from .utils import save_server_metrics
 
-logging.getLogger("flwr").setLevel(logging.INFO)
-logging.getLogger("Trainer").setLevel(logging.INFO)
+# logging.getLogger("flwr").setLevel(logging.INFO)
+# logging.getLogger("Trainer").setLevel(logging.INFO)
 
 load_dotenv(".env")
 
@@ -108,13 +108,13 @@ def configure_logging():
     # ):
     #     FLOWER_LOGGER.addHandler(file_handler)
 
-    for handler in FLOWER_LOGGER.handlers:
-        FLOWER_LOGGER.addHandler(file_handler)
+    # for handler in FLOWER_LOGGER.handlers:
+    #     FLOWER_LOGGER.addHandler(file_handler)
 
     # Get the logger for the ClientAppActor module and attach the same file handler
-    client_actor_logger = logging.getLogger(
-        "flwr.simulation.ray_transport.ray_actor"
-    )
+    # client_actor_logger = logging.getLogger(
+    #     "flwr.simulation.ray_transport.ray_actor"
+    # )
 
     # if not any(
     #     isinstance(handler, logging.FileHandler) and handler.baseFilename == file_handler.baseFilename
@@ -122,14 +122,14 @@ def configure_logging():
     # ):
     #     client_actor_logger.addHandler(file_handler)
 
-    for handler in client_actor_logger.handlers:
-        client_actor_logger.addHandler(file_handler)
+    # for handler in client_actor_logger.handlers:
+    #     handler.addHandler(file_handler)
 
-    # Explicitly configure Ray's logger to propagate
-    ray_logger = logging.getLogger("ray")  # Ray's parent logger
+    # # Explicitly configure Ray's logger to propagate
+    # ray_logger = logging.getLogger("ray")  # Ray's parent logger
 
-    for handler in ray_logger.handlers:
-        ray_logger.addHandler(file_handler)
+    # for handler in ray_logger.handlers:
+    #     ray_logger.addHandler(file_handler)
 
     # Log the start of the session
     logger = logging.getLogger(__name__)
@@ -494,7 +494,7 @@ def server_fn(context: Context):
 import sentry_sdk
 
 sentry_sdk.init(
-    dsn="https://f98aab7e85ca489bdbf8968330522e11@o4508839904870400.ingest.us.sentry.io/4508840575631360",
+    dsn=os.getenv("SENTRY_DSN"),
     # Add data like request headers and IP for users,
     # see https://docs.sentry.io/platforms/python/data-management/data-collected/ for more info
     send_default_pii=True,

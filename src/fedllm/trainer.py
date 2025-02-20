@@ -57,7 +57,7 @@ def time_format(runtime, logger):
     else:
         hours = runtime / 3600
         # logger.info(f'Runtime: {hours:.2f} hours')
-        print(f"Runtime: {minutes:.2f} minutes")
+        print(f"Runtime: {hours:.2f} hours")
 
 
 def convert_to_tokens_reg(data, tokenizer, max_seq_length, device):
@@ -404,6 +404,12 @@ class ManualTrainer:
             self.model.train()
             epoch_loss = 0.0
 
+            runtime_teacher_train, runtime_stu_train, runtime_stu_inf = 0, 0, 0
+            (
+                runtime_teacher_train_temp,
+                runtime_stu_train_temp,
+                runtime_stu_inf_temp,
+            ) = (0, 0, 0)
             # Precompute update steps if state is active.
             # We want exactly num_data_influence_model_update updates during the epoch.
             # To do so, we first compute evenly spaced indices from 0 to (len(train_loader)-1)
@@ -433,13 +439,17 @@ class ManualTrainer:
                         print(
                             "Updating the data influence model and selecting high-quality data..."
                         )
-                        self.update_data_influence_model()
+                        runtime_teacher_train_temp, runtime_stu_train_temp = (
+                            self.update_data_influence_model()
+                        )
 
                     if self.selection_fraction < 1.0:
                         # Filter high-quality data using the data influence model
-                        high_quality_indices = self.select_high_quality_data(
-                            batch=batch,
-                            selection_fraction=self.selection_fraction,
+                        high_quality_indices, runtime_stu_inf_temp = (
+                            self.select_high_quality_data(
+                                batch=batch,
+                                selection_fraction=self.selection_fraction,
+                            )
                         )
                         batch = {
                             k: v[high_quality_indices] for k, v in batch.items()
@@ -465,6 +475,18 @@ class ManualTrainer:
                         f"Step {step + 1}: Train Loss = {epoch_loss / (step + 1):.4f}"
                     )
 
+                runtime_teacher_train += (
+                    runtime_teacher_train_temp
+                    if runtime_teacher_train_temp != 0
+                    else 0
+                )
+                runtime_stu_train += (
+                    runtime_stu_train_temp if runtime_stu_train_temp != 0 else 0
+                )
+                runtime_stu_inf += (
+                    runtime_stu_inf_temp if runtime_stu_inf_temp != 0 else 0
+                )
+
             avg_epoch_loss = epoch_loss / len(self.train_loader)
             training_loss.append(avg_epoch_loss)
 
@@ -474,7 +496,7 @@ class ManualTrainer:
                     metric_scores[name].append(score)
 
             print(
-                f"Epoch {epoch + 1}: Train Loss = {avg_epoch_loss:.4f}, Val Loss = {val_results['eval_loss']:.4f}"
+                f"Epoch {epoch + 1}: Train Loss = {avg_epoch_loss:.4f}, Val Loss = {val_results['eval_loss']:.4f}, Runtime Teacher Train = {runtime_teacher_train:.2f}s, Runtime Student Train = {runtime_stu_train:.2f}s, Runtime Student Inf = {runtime_stu_inf:.2f}s"
             )
 
             # Early stopping logic
@@ -530,10 +552,10 @@ class ManualTrainer:
             influence_scores.extend(logits.squeeze(-1).cpu().numpy())
 
         end_time = time.perf_counter()
-        runtime = round((end_time - start_time), 2)
+        runtime_stu_inf = round((end_time - start_time), 2)
 
-        print("Time influence score prediction using SkipBERT: ")
-        time_format(runtime, logger)
+        # print("Time influence score prediction using SkipBERT: ")
+        # time_format(runtime, logger)
 
         # Normalize influence scores and apply Gumbel-Top-$k$ selection
         influence_scores = np.array(influence_scores)
@@ -564,7 +586,7 @@ class ManualTrainer:
         )[:selection_size]
         print(f"Selected {len(high_quality_indices)} high-quality samples.")
 
-        return high_quality_indices
+        return high_quality_indices, runtime_stu_inf
 
     def create_filtered_dataloader(self, indices):
         """
@@ -651,7 +673,7 @@ class ManualTrainer:
 
         # Train the data influence model using the generated pairs
         print("Starting to train the data influence model...")
-        self.teacher_data_influence_model.train()
+        logger.info("Starting to train the data influence model...")
 
         # Convert to HF datasets
         list_texts, list_score = [], []
@@ -691,14 +713,33 @@ class ManualTrainer:
             drop_last=self.args.dataloader_drop_last,
         )
 
-        for epoch in range(self.mates_args.data_influence_model_epochs):
+        scheduler_DIM = get_scheduler(
+            name="cosine",
+            optimizer=self.teacher_influence_optimizer,
+            num_warmup_steps=100,
+            # num_training_steps=training_args.max_steps
+            num_training_steps=self.mates_args.data_influence_model_epochs
+            * len(holdout_reference_pairs_loader),
+        )
+
+        start_time = time.time()
+
+        for epoch in tqdm(
+            range(self.mates_args.data_influence_model_epochs),
+            total=self.mates_args.data_influence_model_epochs,
+            desc="Epoch",
+            bar_format="{l_bar}{bar} {percentage:3.0f}% | {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
+        ):
+            self.teacher_data_influence_model.train()
             print(
                 f"Epoch {epoch + 1}/{self.mates_args.data_influence_model_epochs}"
             )
+            logger.info(
+                f"LOG: Epoch {epoch + 1}/{self.mates_args.data_influence_model_epochs}"
+            )
 
-            for step, batch_input in tqdm(
-                enumerate(holdout_reference_pairs_loader),
-                bar_format="{l_bar}{bar} {percentage:3.0f}% | {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
+            for step, batch_input in enumerate(
+                holdout_reference_pairs_loader
             ):  # Tokenize the text using the BERT tokenizer
 
                 batch_input = {
@@ -733,11 +774,21 @@ class ManualTrainer:
                 influence_loss.requires_grad = True
                 self.accelerator.backward(influence_loss)
                 self.teacher_influence_optimizer.step()
-
+                scheduler_DIM.step()
                 if step % 50 == 0:
                     print(
                         f"[Influence Training] Step {step}: Loss = {influence_loss.item():.4f}"
                     )
+
+                    logger.info(
+                        f"LOG: [Influence Training] Step {step}: Loss = {influence_loss.item():.4f}"
+                    )
+
+        end_time = time.time()
+        runtime_teacher_train = round((end_time - start_time), 2)
+        print(
+            f"Time training teacher data influence model - {time_format(runtime_teacher_train, logger)}"
+        )
 
         ### Distillation for SkipBERT ###
         train_converted = holdout_reference_pairs.map(
@@ -799,11 +850,15 @@ class ManualTrainer:
 
         # Train the model
         print(f"### KD student data influence model ###")
-        start_time = time.perf_counter()
+        logger.info("### KD student data influence model ###")
+        start_time1 = time.time()
         trainer.train()
-        end_time = time.perf_counter()
-        runtime = round((end_time - start_time), 2)
-        print(f"Time training SkipBERT: {runtime} seconds")
+        end_time1 = time.time()
+        runtime_stu_train = round((end_time1 - start_time1), 2)
+        print(f"Time training SkipBERT: {runtime_stu_train} seconds")
+        logger.info(f"Time training SkipBERT: {runtime_stu_train} seconds")
+
+        return runtime_teacher_train, runtime_stu_train
 
     def evaluate(self, wandb_sample=True):
         self.model.eval()
@@ -870,7 +925,9 @@ class ManualTrainer:
         )
 
         metrics.update({"eval_loss": val_loss / len(self.val_loader)})
+
         print(f"Validation Metrics: {metrics}")
+        logger.info(f"Validation Metrics: {metrics}")
 
         if wandb_sample:
             # Sample Logging

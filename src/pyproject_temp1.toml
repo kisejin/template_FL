@@ -33,7 +33,7 @@ serverapp = "fedllm.server_app:app"
 clientapp = "fedllm.client_app:app"
 
 [tool.flwr.app.config]
-num-server-rounds = 10
+num-server-rounds = 1
 num-supernodes = 10
 random-seed = "17,42,67,89,103,128,149,167,182,197" 
 
@@ -53,9 +53,9 @@ mates.state = true
 # [0.1, 0.05], [0.2, 0.1], [0.3, 0.15]
 mates.holdout-ratio = 0.01
 mates.reference-ratio = 0.002 # 0.01
-mates.holdout-batch-size = 4
+mates.holdout-batch-size = 8
 mates.reference-batch-size = 4
-mates.num-data-influence-model-update = 5
+mates.num-data-influence-model-update = 2 # 5
 mates.tokens_per_param = 20
 mates.copied_model_dropout_rate = 0.3
 mates.data_influence_model_epochs = 10
@@ -85,7 +85,7 @@ skipbert.warmup-steps = 100 # 500
 skipbert.do-train = true
 skipbert.do-eval = true
 skipbert.do-predict = false
-skipbert.max-steps = -1 # -1
+skipbert.max-steps = 100 # -1
 skipbert.evaluation-strategy = "epoch"
 skipbert.save-strategy = "epoch"
 skipbert.lr-scheduler-type = "cosine" # or 'warmup-linear'
@@ -152,9 +152,9 @@ train.training-arguments.per-device-train-batch-size = 8
 train.training-arguments.gradient-accumulation-steps = 1
 train.training-arguments.per-device-eval-batch-size = 4
 train.training-arguments.eval-accumulation-steps = 1
-train.training-arguments.logging-steps = 100 # 10
+train.training-arguments.logging-steps = 10 # 10
 train.training-arguments.num-train-epochs = 1
-train.training-arguments.max-steps = -1 # -1
+train.training-arguments.max-steps = 100 # -1
 train.training-arguments.save-steps = 10
 train.training-arguments.save-total-limit = 2
 train.training-arguments.gradient-checkpointing = true
@@ -171,9 +171,9 @@ train.training-arguments.load_best_model_at_end = true
 train.training-arguments.report-to = "wandb"
 
 # Define local training settings 
-train.strategy.fraction-fit = 0.6 # 0.6 for full and 0.2 for testing
+train.strategy.fraction-fit = 0.3 # 0.6 for full and 0.2 for testing
 train.strategy.fraction-evaluate = 0.0
-train.strategy.min-available-clients = 6 # 6 for full fine tuning and 0.2 for testing
+train.strategy.min-available-clients = 3 # 6 for full fine tuning and 0.2 for testing
 
 [tool.flwr.federations]
 default = "local-simulation"

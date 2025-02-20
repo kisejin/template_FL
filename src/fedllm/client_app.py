@@ -1,50 +1,43 @@
 """flowertune-llm: A Flower / FlowerTune app."""
 
+import logging
 import os
 import warnings
 from typing import Dict, Tuple
 
-import torch
-import logging
-import wandb
 import numpy as np
+import torch
+import wandb
+from deepspeed.accelerator import get_accelerator
+from deepspeed.profiling.flops_profiler import get_model_profile
 from flwr.client import ClientApp, NumPyClient
 from flwr.common import Context
 from flwr.common.config import unflatten_dict
 from flwr.common.typing import NDArrays, Scalar
-from .utils import save_client_metrics
 from omegaconf import DictConfig
-
-
-from transformers import (
-    TrainingArguments,
+from transformers import (  # BertForSequenceClassification,
     DataCollatorForSeq2Seq,
-    Trainer,
     EarlyStoppingCallback,
-    # BertForSequenceClassification,
     GenerationConfig,
+    Trainer,
+    TrainingArguments,
 )
-
-from trl import SFTTrainer, SFTConfig
-from deepspeed.profiling.flops_profiler import get_model_profile
-from deepspeed.accelerator import get_accelerator
-
-from .trainer import ManualTrainer
+from trl import SFTConfig, SFTTrainer
 
 from .dataset import (
     get_data_collator_and_propt_formatting,
     load_data,
-    load_data_homo,
     load_data_hete,
+    load_data_homo,
     replace_keys,
 )
-from .models import *
-
 from .flwr_mods import get_wandb_mod
-from .metrics import exact_match, f1, get_rouge_score
-from .utils import clean_output_text, save_client_metrics
 from .make_data import Prompter, generate_and_tokenize_prompt
+from .metrics import exact_match, f1, get_rouge_score
+from .models import *
 from .server_app import datetime_str
+from .trainer import ManualTrainer
+from .utils import clean_output_text, save_client_metrics
 
 # Avoid warnings
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -163,9 +156,6 @@ class FlowerClient(NumPyClient):
         # Replace -100 with pad token id in labels
         labels_ids[labels_ids == -100] = self.tokenizer.pad_token_id
 
-        print(f"Shape of predictions: {np.shape(pred_ids)}")
-        print(f"Shape of labels: {np.shape(labels_ids)}")
-
         # Decode predictions and labels
         pred_str = self.tokenizer.batch_decode(
             pred_ids, skip_special_tokens=True
@@ -234,6 +224,10 @@ class FlowerClient(NumPyClient):
                 f"Holdoutset size: {len(self.holdoutset)}, Refset size: {len(self.refset)}"
             )
 
+            logger.info(
+                f"LOG: Holdoutset size: {len(self.holdoutset)}, Refset size: {len(self.refset)}"
+            )
+
     def fit(
         self, parameters: NDArrays, config: Dict[str, Scalar]
     ) -> Tuple[NDArrays, int, Dict]:
@@ -265,6 +259,10 @@ class FlowerClient(NumPyClient):
             )  # Numpy params
             print(
                 f"Total tokens: {total_tokens}, Total params: {main_model_param_count}\n"
+            )
+
+            logger.info(
+                f"LOG: Total tokens: {total_tokens}, Total params: {main_model_param_count}\n"
             )
 
             # Calculate the optimal number of training tokens based on the Chinchilla scaling law.
@@ -400,7 +398,7 @@ class FlowerClient(NumPyClient):
         }
 
         # Save results to filde
-
+        print(f"Time: {datetime_str}")
         save_client_metrics(
             client_id=self.id,
             round_number=int(config["current_round"]),

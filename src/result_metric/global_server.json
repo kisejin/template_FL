@@ -1,0 +1,76 @@
+{
+    "round_5": {
+        "general": {
+            "general_f1": 0.47716364107262166,
+            "general_rouge1": 0.5406000000000001,
+            "general_rouge2": 0.25441,
+            "general_rougeL": 0.48224999999999996,
+            "general_rougeLsum": 0.48224999999999996
+        },
+        "finance": {
+            "finance_f1": 0.10734011627906977,
+            "finance_rouge1": 0.42284,
+            "finance_rouge2": 0.06298,
+            "finance_rougeL": 0.4123799999999999,
+            "finance_rougeLsum": 0.4123799999999999
+        },
+        "math": {
+            "math_f1": 0.609782417428314,
+            "math_rouge1": 0.7073699999999999,
+            "math_rouge2": 0.42594999999999994,
+            "math_rougeL": 0.64784,
+            "math_rougeLsum": 0.64784
+        },
+        "medical": {
+            "medical_f1": 0.47436356983536837,
+            "medical_rouge1": 0.6002699999999999,
+            "medical_rouge2": 0.4032,
+            "medical_rougeL": 0.5703099999999999,
+            "medical_rougeLsum": 0.5703099999999999
+        },
+        "code": {
+            "code_f1": 0.5375676949213629,
+            "code_rouge1": 0.7335699999999999,
+            "code_rouge2": 0.5205,
+            "code_rougeL": 0.70497,
+            "code_rougeLsum": 0.70497
+        }
+    },
+    "round_10": {
+        "general": {
+            "general_f1": 0.4103667868180656,
+            "general_rouge1": 0.48085000000000006,
+            "general_rouge2": 0.21785000000000002,
+            "general_rougeL": 0.41170999999999996,
+            "general_rougeLsum": 0.41170999999999996
+        },
+        "finance": {
+            "finance_f1": 0.3017865792966158,
+            "finance_rouge1": 0.33796,
+            "finance_rouge2": 0.19268999999999997,
+            "finance_rougeL": 0.31021,
+            "finance_rougeLsum": 0.31021
+        },
+        "math": {
+            "math_f1": 0.6498853903568717,
+            "math_rouge1": 0.79923,
+            "math_rouge2": 0.5680000000000001,
+            "math_rougeL": 0.72462,
+            "math_rougeLsum": 0.72462
+        },
+        "medical": {
+            "medical_f1": 0.6004739817007357,
+            "medical_rouge1": 0.6821799999999999,
+            "medical_rouge2": 0.41135,
+            "medical_rougeL": 0.6405700000000001,
+            "medical_rougeLsum": 0.6405700000000001
+        },
+        "code": {
+            "code_f1": 0.5256310790512828,
+            "code_rouge1": 0.6989400000000001,
+            "code_rouge2": 0.5787899999999999,
+            "code_rougeL": 0.6921799999999999,
+            "code_rougeLsum": 0.6921799999999999
+        }
+    }
+}

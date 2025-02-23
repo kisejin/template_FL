@@ -10,6 +10,8 @@ import wandb
 from tqdm import tqdm
 import time
 import torch.nn.functional as F
+import torch.nn as nn
+from pydvl.influence.torch import InverseHarmonicMeanInfluence, EkfacInfluence
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +143,7 @@ class ManualTrainer:
 
             self.holdout_loader = DataLoader(
                 self.holdout_dataset,
-                batch_size=self.mates_args.holdout_batch_size,
+                batch_size=1,
                 shuffle=True,
                 collate_fn=self.data_collator,
                 drop_last=self.args.dataloader_drop_last
@@ -262,6 +264,7 @@ class ManualTrainer:
                                                             self.mates_args.num_data_influence_model_update + 2)
                 # Exclude the first (0) and last (len(train_loader)-1) indices:
                 update_steps = set(full_update_indices[1:-1])
+                print(update_steps)
             
             for step, batch in tqdm(enumerate(self.train_loader),
                                     bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
@@ -270,9 +273,10 @@ class ManualTrainer:
 
                 # If state is active and the current step is one of the precomputed update steps,
                 # update the data influence model.
-                if self.mates_args.state and step in update_steps:
-                    print("Updating the data influence model and selecting high-quality data...")
-                    self.update_data_influence_model()
+                if self.mates_args.state:
+                    if step in update_steps:
+                        print("Updating the data influence model and selecting high-quality data...")
+                        self.update_data_influence_model()
 
                     if self.selection_fraction < 1:
                         # Filter high-quality data using the data influence model
@@ -409,54 +413,124 @@ class ManualTrainer:
 
         torch.cuda.empty_cache()
 
-        # Wrap the model with dropout before training on holdout data.
-        self.model = ModelWithDropoutWrapper(self.model, dropout_p=self.mates_args.copied_model_dropout_rate)
+        # -------------------------------
+        # Precompute cached reference loss and its gradient
+        # -------------------------------
 
-        # print("Starting to collect holdout-reference pairs...")
-        self.model.train()
+        # Ensure the model is in evaluation mode
+        self.model.eval()
+
+        # Initialize variables to accumulate loss
+        ref_loss_sum = 0.0
+        num_batches = 0
+
+        # Enable gradient computation for reference loss
+        for ref_batch in self.reference_loader:
+            # Move inputs and labels to the appropriate device
+            input_ids = ref_batch['input_ids'].to(self.accelerator.device)
+            attention_mask = ref_batch['attention_mask'].to(self.accelerator.device)
+            labels = ref_batch['labels'].to(self.accelerator.device)
+
+            # Forward pass
+            outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+            loss = outputs.loss
+
+            # Accumulate loss
+            ref_loss_sum += loss.item()
+            num_batches += 1
+
+            # Compute gradients with respect to model parameters
+            loss.backward()
+
+        # Calculate average reference loss
+        avg_ref_loss = ref_loss_sum / num_batches
+        cached_reference_loss = avg_ref_loss
+
+        # Store gradients of the reference loss
+        grad_ref_dict = {name: param.grad.clone() for name, param in self.model.named_parameters() if param.grad is not None}
+
+        # Save the original model state
+        original_state = copy.deepcopy(self.model.state_dict())
+
+        # -------------------------------
+        # Proceed with holdout updates
+        # -------------------------------
+
+        holdout_reference_pairs = []  # To store (decoded_texts, approximated reference score) pairs
 
         for step, holdout_batch in enumerate(self.holdout_loader):
-            # print(f"Processing holdout batch {step+1}/{len(self.holdout_loader)}...")
-
+            # Set model to training mode
+            self.model.train()
             self.optimizer.zero_grad()
-            # Train on the holdout batch (this updates the wrapped model temporarily)
-            outputs = self.model(
-                input_ids=holdout_batch['input_ids'],
-                attention_mask=holdout_batch['attention_mask'],
-                labels=holdout_batch['labels']
-            )
-            holdout_loss = outputs.loss
-            decoded_texts = self.tokenizer.batch_decode(
-                holdout_batch['input_ids'], 
-                skip_special_tokens=True
-            )
 
-            self.accelerator.backward(holdout_loss)
+            # Move inputs and labels to the appropriate device
+            input_ids = holdout_batch['input_ids'].to(self.accelerator.device)
+            attention_mask = holdout_batch['attention_mask'].to(self.accelerator.device)
+            labels = holdout_batch['labels'].to(self.accelerator.device)
+
+            # Forward pass
+            outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+            holdout_loss = outputs.loss
+
+            # Decode input texts
+            decoded_texts = self.tokenizer.batch_decode(input_ids, skip_special_tokens=True)
+
+            # Backward pass and optimizer step
+            holdout_loss.backward()
             self.optimizer.step()
 
-            # Use the trained (updated) model to compute reference losses
-            # print(f"Evaluating reference losses at step {step}...")
-            self.model.eval()
-            reference_losses = []
+            # Compute parameter deltas
+            delta = {name: self.model.state_dict()[name] - original_state[name] for name in original_state}
 
-            with torch.no_grad():
-                for ref_batch in self.reference_loader:
-                    outputs = self.model(
-                        input_ids=ref_batch['input_ids'],
-                        attention_mask=ref_batch['attention_mask'],
-                        labels=ref_batch['labels']
-                    )
-                    reference_losses.append(outputs.loss.item())
+            # Approximate the change in reference loss
+            delta_loss = sum((grad_ref_dict[name] * delta[name].to(self.accelerator.device)).sum().item() for name in grad_ref_dict)
+            approx_reference_loss = cached_reference_loss + delta_loss
 
-            # Compute the mean of reference losses
-            score = sum(reference_losses) / len(reference_losses) if reference_losses else 0.0
-            holdout_reference_pairs.append((decoded_texts, score))
-            self.model.train()
+            # Store the result
+            holdout_reference_pairs.append((decoded_texts, approx_reference_loss))
 
-        # Restore self.model to its original (untrained) state.
-        self.model = self.model.model
-        original_state = {k: v.to(self.model.dtype) for k, v in original_state.items()}
-        self.model.load_state_dict(original_state, strict=False)
+            # Restore the original model state
+            self.model.load_state_dict(original_state)
+
+
+        # # Set the model to evaluation mode to disable dropout
+        # self.model.eval()
+
+        # start_time = time.time()
+        # loss_fn = nn.CrossEntropyLoss()
+
+        # def compute_loss(outputs, targets):
+        #     logits = outputs.logits
+        #     return loss_fn(logits.view(-1, logits.size(-1)), targets.view(-1))
+
+        # # Initialize and fit the influence model
+        # influence_model = EkfacInfluence(self.model, compute_loss, hessian_regularization=1e4)
+        # influence_model = influence_model.fit(self.holdout_loader)
+
+        # from torch.nn.utils.rnn import pad_sequence
+
+        # # Extract and pad inputs and targets from holdout and reference sets
+        # holdout_x = pad_sequence([torch.tensor(item['input_ids']) for item in self.holdout_dataset], batch_first=True)
+        # holdout_y = pad_sequence([torch.tensor(item['labels']) for item in self.holdout_dataset], batch_first=True)
+        # ref_x = pad_sequence([torch.tensor(item['input_ids']) for item in self.reference_dataset], batch_first=True)
+        # ref_y = pad_sequence([torch.tensor(item['labels']) for item in self.reference_dataset], batch_first=True)
+
+        # # Compute influences
+        # influences = influence_model.influences(ref_x, ref_y, holdout_x, holdout_y, mode="up")
+        # init_time = time.time() - start_time
+        # print(f"Initialization time: {init_time:.4f} seconds")
+
+        # # Set the model back to training mode if needed
+        # self.model.train()
+
+        import csv
+        # Save holdout_reference_pairs to a CSV file
+        with open('holdout_reference_pairs.csv', 'w', newline='') as csvfile:
+            csvwriter = csv.writer(csvfile)
+            csvwriter.writerow(['Decoded Texts', 'Score'])
+            for pair in holdout_reference_pairs:
+                csvwriter.writerow(pair)
+
         # Train the data influence model using the generated pairs
         print("Starting to train the data influence model...")
         self.data_influence_model.train()

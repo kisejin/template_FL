@@ -49,13 +49,12 @@ model.flash_attention = false
 # Use MATES
 mates.state = true
 mates.holdout-ratio = 0.01
-mates.reference-ratio = 0.01
-mates.holdout-batch-size = 4
+mates.reference-ratio = 0.005
 mates.reference-batch-size = 4
-mates.num-data-influence-model-update = 5
+mates.num-data-influence-model-update = 1000
 mates.tokens_per_param = 20
 mates.copied_model_dropout_rate = 0.3
-mates.data_influence_model_epochs = 10
+mates.data_influence_model_epochs = 20
 
 # Define LoRA settings
 model.lora.lora-r = 8 
@@ -108,5 +107,5 @@ default = "local-simulation"
 
 [tool.flwr.federations.local-simulation]
 options.num-supernodes = 10
-options.backend.client-resources.num-cpus = 8
+options.backend.client-resources.num-cpus = 16
 options.backend.client-resources.num-gpus = 2.0

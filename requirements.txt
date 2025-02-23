@@ -36,3 +36,6 @@ google
 deepspeed
 peft
 scikit-learn
+git+https://github.com/aai-institute/pyDVL.git
+distributed
+zarr

@@ -34,7 +34,6 @@ from .flwr_mods import get_wandb_mod
 from .metrics import exact_match, f1, get_rouge_score
 from .utils import save_client_metrics
 from .make_data import Prompter, generate_and_tokenize_prompt
-from .server_app import datetime_str
 
 # Avoid warnings
 os.environ["TOKENIZERS_PARALLELISM"] = "true"

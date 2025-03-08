@@ -97,15 +97,9 @@ class FlowerClient(NumPyClient):
         self.trainset = trainset
         self.valset = valset
         self.mates_args = mates_args
-        self.holdoutset = None
         self.refset = None
-        self.data_influence_model = None
-        self.data_influence_tokenizer = None
         # instantiate model
-        self.model, self.tokenizer = get_model(model_cfg)
-        
-        if self.mates_args.state:
-            self.data_influence_model, self.data_influence_tokenizer = get_data_influence_model(model_cfg)      
+        self.model, self.tokenizer = get_model(model_cfg)    
         
         # (
         #     self.data_collator, 
@@ -179,27 +173,28 @@ class FlowerClient(NumPyClient):
             )
         )
 
-        # Create holdoutset and refset if state is True
+        # Create refset if state is True
         if self.mates_args.state:
             trainset_size = len(self.trainset)
 
-            # Calculate sizes for holdout and reference sets
-            holdout_size = int(trainset_size * self.mates_args.holdout_ratio)
+            # Calculate size for reference set
             ref_size = int(trainset_size * self.mates_args.reference_ratio)
 
             # Shuffle the trainset to ensure randomness
-            shuffled_indices = list(range(trainset_size))
             self.trainset = self.trainset.shuffle()
-
-            # Split the dataset
-            holdout_indices = shuffled_indices[:holdout_size]
-            ref_indices = shuffled_indices[holdout_size:holdout_size + ref_size]
-
-            # Create holdoutset and refset
-            self.holdoutset = self.trainset.select(holdout_indices)
+            
+            # Get all indices and split them for reference set and training set
+            all_indices = list(range(trainset_size))
+            ref_indices = all_indices[:ref_size]
+            train_indices = all_indices[ref_size:]
+            
+            # Create refset
             self.refset = self.trainset.select(ref_indices)
+            
+            # Update trainset to contain everything except the reference set
+            self.trainset = self.trainset.select(train_indices)
 
-            print(f"Holdoutset size: {len(self.holdoutset)}, Refset size: {len(self.refset)}")
+            print(f"Refset size: {len(self.refset)}, Updated trainset size: {len(self.trainset)}")
             
 
     def fit(
@@ -207,36 +202,12 @@ class FlowerClient(NumPyClient):
     ) -> Tuple[NDArrays, int, Dict]:
         selection_fraction = 1.0
         """Implement distributed fit function for a given client."""
-        if self.mates_args.state and int(config["current_round"]) != 1:
-            main_model_params, data_influence_model_params = split_models(parameters)
-            set_parameters(self.model, main_model_params)
-            set_parameters_bert(self.data_influence_model, data_influence_model_params)
-
-            # Compute the total number of tokens in the training set.
-            # print(self.tokenizer.decode(self.trainset[0]['input_ids'], skip_special_tokens = True))
-            total_tokens = sum(
-                len(
-                    f"{self.tokenizer.decode(sample['input_ids'], skip_special_tokens = True)}".split()
-                ) 
-                for sample in self.trainset
-            )  # adjust tokenizer if needed
-
-            # Compute the total number of parameters in the main model.
-            # main_model_param_count = sum(param.numel() for param in main_model_params) # Pytorch params
-            main_model_param_count = sum(param.size for param in main_model_params) # Numpy params
-            print(f"Total tokens: {total_tokens}, Total params: {main_model_param_count}\n")
-
-            # Calculate the optimal number of training tokens based on the Chinchilla scaling law.
-            D_opt = self.mates_args.tokens_per_param * main_model_param_count
-            selection_fraction = D_opt / total_tokens
-            selection_fraction = min(selection_fraction, 1.0)
-        else:
-            set_parameters(self.model, parameters)
-            
-            # Calculate the optimal number of training tokens based on the Chinchilla scaling law
-            D_opt = self.mates_args.tokens_per_param * len(parameters)
-            selection_fraction = D_opt / len(self.trainset)
-            selection_fraction = min(selection_fraction, 1.0)
+        set_parameters(self.model, parameters)
+        
+        # Calculate the optimal number of training tokens based on the Chinchilla scaling law
+        D_opt = self.mates_args.tokens_per_param * len(parameters)
+        selection_fraction = D_opt / len(self.trainset)
+        selection_fraction = min(selection_fraction, 1.0)
 
         new_lr = cosine_annealing(
             int(config["current_round"]),
@@ -280,27 +251,18 @@ class FlowerClient(NumPyClient):
             tokenizer = self.tokenizer,
             train_dataset=self.trainset,
             val_dataset=self.valset.select(range(10)),
-            holdout_dataset=self.holdoutset,
             reference_dataset=self.refset,
             args=self.training_arguments,
             data_collator=self.data_collator,
             compute_metrics=self.compute_metrics, 
             mates_args=self.mates_args,
             selection_fraction=selection_fraction,
-            data_influence_model=self.data_influence_model,
-            data_influence_tokenizer=self.data_influence_tokenizer,
         )
 
         # Train the model
         results = trainer.train()
-        
-        if self.mates_args.state:
-            # After training
-            main_model_params = get_parameters(self.model)
-            data_influence_model_params = model_parameters_to_ndarrays(self.data_influence_model)
-            final_model_params = concatenate_models_with_marker(main_model_params, data_influence_model_params)
-        else:
-            final_model_params = get_parameters(self.model)
+    
+        final_model_params = get_parameters(self.model)
         
         torch.cuda.empty_cache()
 
@@ -325,7 +287,7 @@ class FlowerClient(NumPyClient):
             client_id=self.id, 
             round_number=int(config["current_round"]), 
             metrics={**print_results, **results['eval_scores'], 'total_flops': flops_value}, 
-            folder=f"result_metric/{datetime_str}"
+            folder=f"result_metric"
         )
             
         return (

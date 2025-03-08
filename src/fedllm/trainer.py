@@ -10,8 +10,6 @@ import wandb
 from tqdm import tqdm
 import time
 import torch.nn.functional as F
-import torch.nn as nn
-from pydvl.influence.torch import InverseHarmonicMeanInfluence, EkfacInfluence
 
 logger = logging.getLogger(__name__)
 
@@ -96,9 +94,8 @@ class ManualLLMSampleCB:
 
 class ManualTrainer:
     def __init__(
-        self, model, tokenizer, train_dataset, val_dataset, holdout_dataset, reference_dataset,
-        args, data_collator, compute_metrics, mates_args, selection_fraction, data_influence_model, 
-        data_influence_tokenizer
+        self, model, tokenizer, train_dataset, val_dataset, reference_dataset,
+        args, data_collator, compute_metrics, mates_args, selection_fraction
     ):
         self.accelerator = Accelerator()
         self.model = model
@@ -108,8 +105,6 @@ class ManualTrainer:
         self.compute_metrics = compute_metrics
         self.mates_args = mates_args
         self.selection_fraction = selection_fraction
-        self.data_influence_model = data_influence_model
-        self.data_influence_tokenizer = data_influence_tokenizer
 
         # Remove unused columns from datasets
         if train_dataset:
@@ -138,16 +133,7 @@ class ManualTrainer:
             self.val_loader = None
 
         if self.mates_args.state:
-            self.holdout_dataset = self._remove_unused_columns(holdout_dataset, "holdout")
             self.reference_dataset = self._remove_unused_columns(reference_dataset, "reference")
-
-            self.holdout_loader = DataLoader(
-                self.holdout_dataset,
-                batch_size=1,
-                shuffle=True,
-                collate_fn=self.data_collator,
-                drop_last=self.args.dataloader_drop_last
-            )
 
             self.reference_loader = DataLoader(
                 self.reference_dataset,
@@ -155,6 +141,11 @@ class ManualTrainer:
                 shuffle=False,
                 collate_fn=self.data_collator,
                 drop_last=self.args.dataloader_drop_last
+            )
+
+            # Prepare holdout and reference loaders for Accelerator
+            self.reference_loader = self.accelerator.prepare(
+                self.reference_loader
             )
 
         # Prepare optimizer
@@ -167,13 +158,6 @@ class ManualTrainer:
         self.model, self.optimizer, self.train_loader, self.val_loader = self.accelerator.prepare(
             self.model, self.optimizer, self.train_loader, self.val_loader
         )
-
-        if self.mates_args.state:
-            self.influence_optimizer = torch.optim.AdamW(self.data_influence_model.parameters(), lr=self.args.learning_rate)
-            # Prepare holdout and reference loaders for Accelerator
-            self.data_influence_model, self.holdout_loader, self.reference_loader, self.influence_optimizer = self.accelerator.prepare(
-                self.data_influence_model, self.holdout_loader, self.reference_loader, self.influence_optimizer
-            )
 
     def _remove_unused_columns(self, dataset, description=None):
         """
@@ -213,27 +197,6 @@ class ManualTrainer:
 
         return dataset.remove_columns(ignored_columns)
 
-    def _get_evenly_spaced_ints(self, n, num_updates):
-        """
-        Returns num_updates integers approximately evenly spaced between 0 and n (inclusive).
-
-        If the exact spacing is not an integer, the intermediate values are rounded to the nearest integer.
-        """
-        if num_updates == 1:
-            return [0]
-        
-        step = n / (num_updates - 1)
-        result = []
-        for i in range(num_updates):
-            # Always force the first and last elements to be exactly 0 and n.
-            if i == 0:
-                result.append(0)
-            elif i == num_updates - 1:
-                result.append(n)
-            else:
-                result.append(round(i * step))
-        return result
-
     def train(self):
         best_val_loss = float('inf')
         early_stopping_counter = 0
@@ -260,31 +223,17 @@ class ManualTrainer:
             # To do so, we first compute evenly spaced indices from 0 to (len(train_loader)-1)
             # with 2 extra points (to include endpoints), and then remove the endpoints.
             if self.mates_args.state:
-                full_update_indices = self._get_evenly_spaced_ints(len(self.train_loader) - 1,
-                                                            self.mates_args.num_data_influence_model_update + 2)
-                # Exclude the first (0) and last (len(train_loader)-1) indices:
-                update_steps = set(full_update_indices[1:-1])
-                print(update_steps)
+                # full_update_indices = self._get_evenly_spaced_ints(len(self.train_loader) - 1,
+                #                                             self.mates_args.num_data_influence_model_update + 2)
+                # # Exclude the first (0) and last (len(train_loader)-1) indices:
+                # update_steps = set(full_update_indices[1:-1])
+
+                self.prune_dataset_by_perplexity()
             
             for step, batch in tqdm(enumerate(self.train_loader),
                                     bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
                 if step >= self.args.max_steps and self.args.max_steps > 0:
                     break
-
-                # If state is active and the current step is one of the precomputed update steps,
-                # update the data influence model.
-                if self.mates_args.state:
-                    if step in update_steps:
-                        print("Updating the data influence model and selecting high-quality data...")
-                        self.update_data_influence_model()
-
-                    if self.selection_fraction < 1:
-                        # Filter high-quality data using the data influence model
-                        high_quality_indices = self.select_high_quality_data(
-                            batch=batch,
-                            selection_fraction=self.selection_fraction,
-                        )
-                        batch = {k: v[high_quality_indices] for k, v in batch.items()}
 
                 self.optimizer.zero_grad()
 
@@ -331,241 +280,179 @@ class ManualTrainer:
         }
     
 
-    def select_high_quality_data(self, batch, selection_fraction):
+    def train_reference_model(self):
         """
-        Use the data influence model to predict quality scores and select high-quality data indices.
+        Trains the reference model on the reference dataset.
+        Applies quantization before training for better efficiency.
         """
-        # print("Selecting high-quality data using the data influence model...")
+        if not self.mates_args.state or not hasattr(self, "reference_loader"):
+            print("Reference loader not available. Skipping reference model training.")
+            return
 
-        # Predict influence scores for the batch
-        influence_scores = []
-        self.data_influence_model.eval()
+        print("Training reference model...")
+        
+        # First create a copy of the model
+        model_to_quantize = copy.deepcopy(self.model)
+        
+        # Configure quantization based on specified bit precision
+        quantization_bit = getattr(self.mates_args, "quantization_bit", 8)  # Default to 8-bit for training
+        
+        # For training, we should use 8-bit as 4-bit typically doesn't support training
+        if quantization_bit != 8 and self.accelerator.is_main_process:
+            print(f"Warning: {quantization_bit}-bit quantization may not support training.")
+            print("Switching to 8-bit quantization which better supports training.")
+            quantization_bit = 8
+        
+        print(f"Applying {quantization_bit}-bit quantization before training...")
+        
+        try:
+            from transformers import BitsAndBytesConfig, AutoModelForCausalLM
+            
+            # Create quantization config
+            quantization_config = BitsAndBytesConfig(
+                load_in_8bit=True,
+                bnb_8bit_use_double_quant=True,
+                bnb_8bit_enable_fp32_cpu_offload=True  # Enable FP32 offload for stability during training
+            )
+            
+            # Get model config
+            model_config = model_to_quantize.config
+            
+            # Save model path if available
+            model_path = getattr(model_to_quantize, "name_or_path", None)
+            
+            # If no path available, save to temp directory
+            if not model_path:
+                import os, tempfile
+                temp_dir = tempfile.mkdtemp()
+                model_to_quantize.save_pretrained(temp_dir)
+                model_path = temp_dir
+            
+            # Reload with quantization
+            self.reference_model = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                config=model_config,
+                quantization_config=quantization_config,
+                device_map="auto"
+            )
+            
+            print(f"Successfully quantized reference model to {quantization_bit}-bit")
+            
+        except Exception as e:
+            print(f"Quantization failed: {e}")
+            print("Falling back to full precision model")
+            self.reference_model = model_to_quantize
+        
+        # Prepare optimizer for reference model
+        # Use optimizer with 8-bit Adam which is compatible with quantized models
+        try:
+            import bitsandbytes as bnb
+            ref_optimizer = bnb.optim.AdamW8bit(
+                self.reference_model.parameters(),
+                lr=self.args.learning_rate
+            )
+            print("Using 8-bit optimizer for quantized model")
+        except:
+            ref_optimizer = torch.optim.AdamW(
+                self.reference_model.parameters(),
+                lr=self.args.learning_rate
+            )
+            print("Using standard optimizer")
+        
+        # Prepare reference model and optimizer with accelerator
+        self.reference_model, ref_optimizer = self.accelerator.prepare(
+            self.reference_model, ref_optimizer
+        )
+        
+        # Train the quantized model
+        ref_epochs = self.args.num_train_epochs
+        self.reference_model.train()
+        
+        for epoch in range(ref_epochs):
+            total_loss = 0.0
+            for batch in self.reference_loader:
+                ref_optimizer.zero_grad()
+                outputs = self.reference_model(**batch)
+                loss = outputs.loss
+                
+                # Use accelerator for backward pass
+                self.accelerator.backward(loss)
+                ref_optimizer.step()
+                
+                total_loss += loss.item()
+            
+            avg_loss = total_loss / len(self.reference_loader)
+            print(f"Reference model - Epoch {epoch+1}/{ref_epochs}, Loss: {avg_loss:.4f}")
+        
+        self.reference_model.eval()
+        print("Reference model training completed.")
 
-        start_time = time.perf_counter()
+
+    def prune_dataset_by_perplexity(self, selection_criteria="high"):
+        """
+        Prunes the training dataset based on perplexity scores from reference model.
+        """
+        self.train_reference_model()
+        self.reference_model.eval()
+        perplexity_dict = {}
+        
+        print(f"Computing perplexity for training samples using reference model...")
+        
+        # Compute perplexity for each sample with optimized batch processing
+        batch_indices = []
+        batch_perplexities = []
         
         with torch.no_grad():
-            text = self.tokenizer.batch_decode(
-                batch['input_ids'], 
-                skip_special_tokens=True
-            )
-            
-            # Tokenize the text using the BERT tokenizer
-            bert_inputs = self.data_influence_tokenizer(
-                text,
-                truncation=True,
-                padding='max_length',
-                max_length=256,
-                return_tensors='pt'
-            ).to(self.accelerator.device)
-            
-            # Get influence scores from the data influence model
-            outputs = self.data_influence_model(
-                input_ids=bert_inputs['input_ids'],
-                attention_mask=bert_inputs['attention_mask'],
-            )
+            for idx, batch in enumerate(self.train_loader):
+                outputs = self.reference_model(**batch)
+                loss = outputs.loss.item()
                 
-            influence_scores.extend(outputs.logits.squeeze(-1).cpu().numpy())
-
-        end_time = time.perf_counter()
-        runtime = round((end_time - start_time), 2)
+                # Calculate perplexity
+                perplexity = 2 ** loss
+                perplexity_dict[idx] = perplexity
+                
+                if idx % 100 == 0:
+                    print(f"Processed {idx}/{len(self.train_loader)} batches")
         
-        # print(f'Time influence score prediction using SkipBERT: {runtime}')
-
-        # Normalize influence scores and apply Gumbel-Top-$k$ selection
-        influence_scores = np.array(influence_scores)
-        # print(">> Influence scores shape:", influence_scores.shape)
-
-        # Add Gumbel noise for diversity
-        rng = np.random.default_rng()
-        gumbel_noise = rng.gumbel(size=len(influence_scores))
-        influence_scores += gumbel_noise
-
-        # Select top indices based on influence scores
-        # print(f"Selection fraction: {selection_fraction}")
-        selection_size = int(len(influence_scores) * selection_fraction)
-        selection_size = max(1, selection_size)  # Ensure at least one sample is selected
-        # print(f"List influence score: {influence_scores}, length: {len(influence_scores)}")
-        # print(f"Selection size: {selection_size}")
-        high_quality_indices = np.argpartition(influence_scores, selection_size)[:selection_size]
-        # print(f"Selected {len(high_quality_indices)} high-quality samples.")
-
-        return high_quality_indices
-
-    def create_filtered_dataloader(self, indices):
-        """
-        Create a new dataloader with only the selected high-quality data.
-        """
-        print("Creating a filtered dataloader with selected high-quality data...")
-        subset_dataset = torch.utils.data.Subset(self.train_dataset, indices)
-        return torch.utils.data.DataLoader(
-            subset_dataset,
+        # Sort samples by perplexity score
+        sorted_indices = sorted(perplexity_dict.keys(), key=lambda x: perplexity_dict[x])
+        
+        # Select indices based on criteria
+        total_samples = len(sorted_indices)
+        num_samples_to_keep = int(total_samples * self.selection_fraction)
+        
+        if selection_criteria == "low":
+            selected_indices = sorted_indices[:num_samples_to_keep]
+        elif selection_criteria == "medium":
+            mid_point = total_samples // 2
+            start_idx = mid_point - (num_samples_to_keep // 2)
+            end_idx = start_idx + num_samples_to_keep
+            selected_indices = sorted_indices[start_idx:end_idx]
+        elif selection_criteria == "high":
+            selected_indices = sorted_indices[-num_samples_to_keep:]
+        else:
+            raise ValueError(f"Unknown selection criteria: {selection_criteria}")
+        
+        # Create pruned dataset
+        pruned_dataset = self.train_dataset.select(selected_indices)
+        
+        # Create new train loader with pruned dataset
+        new_train_loader = DataLoader(
+            pruned_dataset,
             batch_size=self.args.per_device_train_batch_size,
             shuffle=True,
-            collate_fn=self.data_collator,  # Use the same collate function
+            collate_fn=self.data_collator,
             drop_last=self.args.dataloader_drop_last
         )
-
-
-    def update_data_influence_model(self):
-        # Save the original (untrained) state of self.model.
-        original_state = copy.deepcopy(self.model.state_dict())
-        holdout_reference_pairs = []
+        
+        # Prepare the new loader with accelerator
+        self.train_loader = self.accelerator.prepare(new_train_loader)
+        self.train_dataset = pruned_dataset
 
         torch.cuda.empty_cache()
-
-        # -------------------------------
-        # Precompute cached reference loss and its gradient
-        # -------------------------------
-
-        # Ensure the model is in evaluation mode
-        self.model.eval()
-
-        # Initialize variables to accumulate loss
-        ref_loss_sum = 0.0
-        num_batches = 0
-
-        # Enable gradient computation for reference loss
-        for ref_batch in self.reference_loader:
-            # Move inputs and labels to the appropriate device
-            input_ids = ref_batch['input_ids'].to(self.accelerator.device)
-            attention_mask = ref_batch['attention_mask'].to(self.accelerator.device)
-            labels = ref_batch['labels'].to(self.accelerator.device)
-
-            # Forward pass
-            outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-            loss = outputs.loss
-
-            # Accumulate loss
-            ref_loss_sum += loss.item()
-            num_batches += 1
-
-            # Compute gradients with respect to model parameters
-            loss.backward()
-
-        # Calculate average reference loss
-        avg_ref_loss = ref_loss_sum / num_batches
-        cached_reference_loss = avg_ref_loss
-
-        # Store gradients of the reference loss
-        grad_ref_dict = {name: param.grad.clone() for name, param in self.model.named_parameters() if param.grad is not None}
-
-        # Save the original model state
-        original_state = copy.deepcopy(self.model.state_dict())
-
-        # -------------------------------
-        # Proceed with holdout updates
-        # -------------------------------
-
-        holdout_reference_pairs = []  # To store (decoded_texts, approximated reference score) pairs
-
-        for step, holdout_batch in enumerate(self.holdout_loader):
-            # Set model to training mode
-            self.model.train()
-            self.optimizer.zero_grad()
-
-            # Move inputs and labels to the appropriate device
-            input_ids = holdout_batch['input_ids'].to(self.accelerator.device)
-            attention_mask = holdout_batch['attention_mask'].to(self.accelerator.device)
-            labels = holdout_batch['labels'].to(self.accelerator.device)
-
-            # Forward pass
-            outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-            holdout_loss = outputs.loss
-
-            # Decode input texts
-            decoded_texts = self.tokenizer.batch_decode(input_ids, skip_special_tokens=True)
-
-            # Backward pass and optimizer step
-            holdout_loss.backward()
-            self.optimizer.step()
-
-            # Compute parameter deltas
-            delta = {name: self.model.state_dict()[name] - original_state[name] for name in original_state}
-
-            # Approximate the change in reference loss
-            delta_loss = sum((grad_ref_dict[name] * delta[name].to(self.accelerator.device)).sum().item() for name in grad_ref_dict)
-            approx_reference_loss = cached_reference_loss + delta_loss
-
-            # Store the result
-            holdout_reference_pairs.append((decoded_texts, approx_reference_loss))
-
-            # Restore the original model state
-            self.model.load_state_dict(original_state)
-
-
-        # # Set the model to evaluation mode to disable dropout
-        # self.model.eval()
-
-        # start_time = time.time()
-        # loss_fn = nn.CrossEntropyLoss()
-
-        # def compute_loss(outputs, targets):
-        #     logits = outputs.logits
-        #     return loss_fn(logits.view(-1, logits.size(-1)), targets.view(-1))
-
-        # # Initialize and fit the influence model
-        # influence_model = EkfacInfluence(self.model, compute_loss, hessian_regularization=1e4)
-        # influence_model = influence_model.fit(self.holdout_loader)
-
-        # from torch.nn.utils.rnn import pad_sequence
-
-        # # Extract and pad inputs and targets from holdout and reference sets
-        # holdout_x = pad_sequence([torch.tensor(item['input_ids']) for item in self.holdout_dataset], batch_first=True)
-        # holdout_y = pad_sequence([torch.tensor(item['labels']) for item in self.holdout_dataset], batch_first=True)
-        # ref_x = pad_sequence([torch.tensor(item['input_ids']) for item in self.reference_dataset], batch_first=True)
-        # ref_y = pad_sequence([torch.tensor(item['labels']) for item in self.reference_dataset], batch_first=True)
-
-        # # Compute influences
-        # influences = influence_model.influences(ref_x, ref_y, holdout_x, holdout_y, mode="up")
-        # init_time = time.time() - start_time
-        # print(f"Initialization time: {init_time:.4f} seconds")
-
-        # # Set the model back to training mode if needed
-        # self.model.train()
-
-        import csv
-        # Save holdout_reference_pairs to a CSV file
-        with open('holdout_reference_pairs.csv', 'w', newline='') as csvfile:
-            csvwriter = csv.writer(csvfile)
-            csvwriter.writerow(['Decoded Texts', 'Score'])
-            for pair in holdout_reference_pairs:
-                csvwriter.writerow(pair)
-
-        # Train the data influence model using the generated pairs
-        print("Starting to train the data influence model...")
-        self.data_influence_model.train()
-
-        for epoch in range(self.mates_args.data_influence_model_epochs):
-            print(f"Epoch {epoch + 1}/{self.mates_args.data_influence_model_epochs}")
-            for step, (text, score) in enumerate(holdout_reference_pairs):
-                # Tokenize the text using the BERT tokenizer
-                bert_inputs = self.data_influence_tokenizer(
-                    text,
-                    truncation=True,
-                    padding='max_length',
-                    max_length=256,
-                    return_tensors='pt'
-                ).to(self.accelerator.device)
-
-                # Convert score to tensor and enable gradients
-                score_tensor = torch.tensor([score], device=self.accelerator.device, dtype=torch.float32, requires_grad=True)
-                
-                # Train the data influence model
-                self.influence_optimizer.zero_grad()
-                outputs = self.data_influence_model(
-                    input_ids=bert_inputs['input_ids'],
-                    attention_mask=bert_inputs['attention_mask'],
-                    labels=score_tensor
-                )
-                influence_loss = outputs.loss
-
-                self.accelerator.backward(influence_loss)
-
-                if step % 50 == 0:
-                    print(f"[Influence Training] Step {step}: Loss = {influence_loss.item():.4f}")
-
-
-
+        
+        print(f"Dataset pruned: {len(pruned_dataset)}/{total_samples} samples kept ({selection_criteria} selection)")
+        
     def evaluate(self, wandb_sample=False):
         self.model.eval()
         val_loss = 0.0
@@ -627,4 +514,3 @@ class ManualTrainer:
             llm_sample_cb.log_samples_to_wandb(self.val_dataset)
 
         return metrics
-

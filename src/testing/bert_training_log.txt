@@ -1,0 +1,292 @@
+Loaded 2452 training pairs and 614 testing pairs from holdout_perplexity_pairs2.csv
+Some weights of BertForSequenceClassification were not initialized from the model checkpoint at bert-base-uncased and are newly initialized: ['classifier.bias', 'classifier.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+[Epoch 1/20] Batch 0: Loss = 66.6192
+[Epoch 1/20] Batch 25: Loss = 29.8719
+[Epoch 1/20] Batch 50: Loss = 67.1845
+[Epoch 1/20] Batch 75: Loss = 10.8195
+[Epoch 1/20] Batch 100: Loss = 4.0945
+[Epoch 1/20] Batch 125: Loss = 7.7209
+[Epoch 1/20] Batch 150: Loss = 5.9384
+[Epoch 1/20] Batch 175: Loss = 6.6582
+[Epoch 1/20] Batch 200: Loss = 35.3940
+[Epoch 1/20] Batch 225: Loss = 3.6989
+[Epoch 1/20] Batch 250: Loss = 2.2387
+[Epoch 1/20] Batch 275: Loss = 37.9990
+[Epoch 1/20] Batch 300: Loss = 2.8868
+[Epoch 1/20] Train Loss: 15.0621, Val Loss: 8.1263, Val MSE: 8.1251, Val MAE: 1.8157
+New best model found at epoch 1 with validation loss: 8.1263
+[Epoch 2/20] Batch 0: Loss = 3.8960
+[Epoch 2/20] Batch 25: Loss = 1.9461
+[Epoch 2/20] Batch 50: Loss = 29.6154
+[Epoch 2/20] Batch 75: Loss = 3.3163
+[Epoch 2/20] Batch 100: Loss = 4.0743
+[Epoch 2/20] Batch 125: Loss = 4.0172
+[Epoch 2/20] Batch 150: Loss = 4.4982
+[Epoch 2/20] Batch 175: Loss = 4.6259
+[Epoch 2/20] Batch 200: Loss = 26.6869
+[Epoch 2/20] Batch 225: Loss = 2.6083
+[Epoch 2/20] Batch 250: Loss = 2.9480
+[Epoch 2/20] Batch 275: Loss = 23.9571
+[Epoch 2/20] Batch 300: Loss = 2.8603
+[Epoch 2/20] Train Loss: 6.8977, Val Loss: 6.6265, Val MSE: 6.6284, Val MAE: 1.6714
+New best model found at epoch 2 with validation loss: 6.6265
+[Epoch 3/20] Batch 0: Loss = 2.4881
+[Epoch 3/20] Batch 25: Loss = 2.3533
+[Epoch 3/20] Batch 50: Loss = 25.2839
+[Epoch 3/20] Batch 75: Loss = 3.6851
+[Epoch 3/20] Batch 100: Loss = 3.1479
+[Epoch 3/20] Batch 125: Loss = 2.2285
+[Epoch 3/20] Batch 150: Loss = 4.8716
+[Epoch 3/20] Batch 175: Loss = 4.9518
+[Epoch 3/20] Batch 200: Loss = 19.0599
+[Epoch 3/20] Batch 225: Loss = 3.0372
+[Epoch 3/20] Batch 250: Loss = 0.9028
+[Epoch 3/20] Batch 275: Loss = 19.2737
+[Epoch 3/20] Batch 300: Loss = 4.2967
+[Epoch 3/20] Train Loss: 4.8417, Val Loss: 6.1546, Val MSE: 6.1600, Val MAE: 1.6774
+New best model found at epoch 3 with validation loss: 6.1546
+[Epoch 4/20] Batch 0: Loss = 2.7002
+[Epoch 4/20] Batch 25: Loss = 4.7063
+[Epoch 4/20] Batch 50: Loss = 17.9840
+[Epoch 4/20] Batch 75: Loss = 2.3225
+[Epoch 4/20] Batch 100: Loss = 2.5538
+[Epoch 4/20] Batch 125: Loss = 1.3436
+[Epoch 4/20] Batch 150: Loss = 1.6978
+[Epoch 4/20] Batch 175: Loss = 2.3114
+[Epoch 4/20] Batch 200: Loss = 15.5116
+[Epoch 4/20] Batch 225: Loss = 1.2929
+[Epoch 4/20] Batch 250: Loss = 0.7724
+[Epoch 4/20] Batch 275: Loss = 17.7317
+[Epoch 4/20] Batch 300: Loss = 2.1435
+[Epoch 4/20] Train Loss: 3.6099, Val Loss: 6.3553, Val MSE: 6.3544, Val MAE: 1.6534
+[Epoch 5/20] Batch 0: Loss = 1.1410
+[Epoch 5/20] Batch 25: Loss = 4.7365
+[Epoch 5/20] Batch 50: Loss = 20.2168
+[Epoch 5/20] Batch 75: Loss = 2.4189
+[Epoch 5/20] Batch 100: Loss = 1.2512
+[Epoch 5/20] Batch 125: Loss = 4.7855
+[Epoch 5/20] Batch 150: Loss = 1.3618
+[Epoch 5/20] Batch 175: Loss = 0.6535
+[Epoch 5/20] Batch 200: Loss = 12.5063
+[Epoch 5/20] Batch 225: Loss = 0.7462
+[Epoch 5/20] Batch 250: Loss = 1.5322
+[Epoch 5/20] Batch 275: Loss = 12.7357
+[Epoch 5/20] Batch 300: Loss = 0.8538
+[Epoch 5/20] Train Loss: 2.8851, Val Loss: 6.1416, Val MSE: 6.1292, Val MAE: 1.6278
+New best model found at epoch 5 with validation loss: 6.1416
+[Epoch 6/20] Batch 0: Loss = 0.6009
+[Epoch 6/20] Batch 25: Loss = 0.4225
+[Epoch 6/20] Batch 50: Loss = 13.1254
+[Epoch 6/20] Batch 75: Loss = 0.8438
+[Epoch 6/20] Batch 100: Loss = 0.7142
+[Epoch 6/20] Batch 125: Loss = 0.6596
+[Epoch 6/20] Batch 150: Loss = 0.9158
+[Epoch 6/20] Batch 175: Loss = 0.4172
+[Epoch 6/20] Batch 200: Loss = 10.1497
+[Epoch 6/20] Batch 225: Loss = 1.7661
+[Epoch 6/20] Batch 250: Loss = 0.9021
+[Epoch 6/20] Batch 275: Loss = 11.3237
+[Epoch 6/20] Batch 300: Loss = 0.6884
+[Epoch 6/20] Train Loss: 2.3339, Val Loss: 6.1203, Val MSE: 6.1101, Val MAE: 1.6548
+New best model found at epoch 6 with validation loss: 6.1203
+[Epoch 7/20] Batch 0: Loss = 0.9294
+[Epoch 7/20] Batch 25: Loss = 0.5802
+[Epoch 7/20] Batch 50: Loss = 11.4543
+[Epoch 7/20] Batch 75: Loss = 0.6836
+[Epoch 7/20] Batch 100: Loss = 1.1318
+[Epoch 7/20] Batch 125: Loss = 3.3062
+[Epoch 7/20] Batch 150: Loss = 0.6423
+[Epoch 7/20] Batch 175: Loss = 1.6571
+[Epoch 7/20] Batch 200: Loss = 8.9205
+[Epoch 7/20] Batch 225: Loss = 0.7785
+[Epoch 7/20] Batch 250: Loss = 0.7210
+[Epoch 7/20] Batch 275: Loss = 11.1013
+[Epoch 7/20] Batch 300: Loss = 2.0702
+[Epoch 7/20] Train Loss: 2.0535, Val Loss: 8.9706, Val MSE: 8.9495, Val MAE: 1.9983
+[Epoch 8/20] Batch 0: Loss = 1.1602
+[Epoch 8/20] Batch 25: Loss = 2.2817
+[Epoch 8/20] Batch 50: Loss = 9.0294
+[Epoch 8/20] Batch 75: Loss = 0.7976
+[Epoch 8/20] Batch 100: Loss = 0.6072
+[Epoch 8/20] Batch 125: Loss = 0.7731
+[Epoch 8/20] Batch 150: Loss = 0.6185
+[Epoch 8/20] Batch 175: Loss = 0.6682
+[Epoch 8/20] Batch 200: Loss = 7.0371
+[Epoch 8/20] Batch 225: Loss = 0.7116
+[Epoch 8/20] Batch 250: Loss = 0.5028
+[Epoch 8/20] Batch 275: Loss = 9.0647
+[Epoch 8/20] Batch 300: Loss = 3.9142
+[Epoch 8/20] Train Loss: 1.9312, Val Loss: 8.2459, Val MSE: 8.2310, Val MAE: 1.9442
+[Epoch 9/20] Batch 0: Loss = 0.6057
+[Epoch 9/20] Batch 25: Loss = 0.9535
+[Epoch 9/20] Batch 50: Loss = 7.4436
+[Epoch 9/20] Batch 75: Loss = 0.6916
+[Epoch 9/20] Batch 100: Loss = 1.5309
+[Epoch 9/20] Batch 125: Loss = 2.3655
+[Epoch 9/20] Batch 150: Loss = 1.6645
+[Epoch 9/20] Batch 175: Loss = 0.6678
+[Epoch 9/20] Batch 200: Loss = 6.9402
+[Epoch 9/20] Batch 225: Loss = 0.9594
+[Epoch 9/20] Batch 250: Loss = 1.5413
+[Epoch 9/20] Batch 275: Loss = 7.1553
+[Epoch 9/20] Batch 300: Loss = 2.1697
+[Epoch 9/20] Train Loss: 1.7202, Val Loss: 7.9801, Val MSE: 7.9709, Val MAE: 1.9470
+[Epoch 10/20] Batch 0: Loss = 0.7078
+[Epoch 10/20] Batch 25: Loss = 1.2245
+[Epoch 10/20] Batch 50: Loss = 5.7793
+[Epoch 10/20] Batch 75: Loss = 0.8550
+[Epoch 10/20] Batch 100: Loss = 0.4841
+[Epoch 10/20] Batch 125: Loss = 1.0670
+[Epoch 10/20] Batch 150: Loss = 0.6188
+[Epoch 10/20] Batch 175: Loss = 0.4569
+[Epoch 10/20] Batch 200: Loss = 5.5103
+[Epoch 10/20] Batch 225: Loss = 1.6861
+[Epoch 10/20] Batch 250: Loss = 1.7764
+[Epoch 10/20] Batch 275: Loss = 4.9444
+[Epoch 10/20] Batch 300: Loss = 0.8175
+[Epoch 10/20] Train Loss: 1.5908, Val Loss: 7.1504, Val MSE: 7.1436, Val MAE: 1.8102
+[Epoch 11/20] Batch 0: Loss = 0.7944
+[Epoch 11/20] Batch 25: Loss = 0.9804
+[Epoch 11/20] Batch 50: Loss = 5.5236
+[Epoch 11/20] Batch 75: Loss = 0.3823
+[Epoch 11/20] Batch 100: Loss = 0.5528
+[Epoch 11/20] Batch 125: Loss = 1.0242
+[Epoch 11/20] Batch 150: Loss = 1.8842
+[Epoch 11/20] Batch 175: Loss = 0.4387
+[Epoch 11/20] Batch 200: Loss = 3.8010
+[Epoch 11/20] Batch 225: Loss = 0.3736
+[Epoch 11/20] Batch 250: Loss = 1.1725
+[Epoch 11/20] Batch 275: Loss = 3.1634
+[Epoch 11/20] Batch 300: Loss = 0.3617
+[Epoch 11/20] Train Loss: 1.2095, Val Loss: 6.7421, Val MSE: 6.7316, Val MAE: 1.7324
+[Epoch 12/20] Batch 0: Loss = 0.7704
+[Epoch 12/20] Batch 25: Loss = 0.5192
+[Epoch 12/20] Batch 50: Loss = 4.5593
+[Epoch 12/20] Batch 75: Loss = 0.3916
+[Epoch 12/20] Batch 100: Loss = 0.9438
+[Epoch 12/20] Batch 125: Loss = 1.5347
+[Epoch 12/20] Batch 150: Loss = 1.1597
+[Epoch 12/20] Batch 175: Loss = 0.8250
+[Epoch 12/20] Batch 200: Loss = 3.5943
+[Epoch 12/20] Batch 225: Loss = 1.0386
+[Epoch 12/20] Batch 250: Loss = 1.0815
+[Epoch 12/20] Batch 275: Loss = 3.3986
+[Epoch 12/20] Batch 300: Loss = 0.2967
+[Epoch 12/20] Train Loss: 1.0593, Val Loss: 6.8423, Val MSE: 6.8306, Val MAE: 1.7449
+[Epoch 13/20] Batch 0: Loss = 0.7867
+[Epoch 13/20] Batch 25: Loss = 0.8978
+[Epoch 13/20] Batch 50: Loss = 2.7757
+[Epoch 13/20] Batch 75: Loss = 0.3201
+[Epoch 13/20] Batch 100: Loss = 1.0936
+[Epoch 13/20] Batch 125: Loss = 0.7866
+[Epoch 13/20] Batch 150: Loss = 0.4079
+[Epoch 13/20] Batch 175: Loss = 1.3918
+[Epoch 13/20] Batch 200: Loss = 2.5019
+[Epoch 13/20] Batch 225: Loss = 0.4003
+[Epoch 13/20] Batch 250: Loss = 0.3309
+[Epoch 13/20] Batch 275: Loss = 3.5608
+[Epoch 13/20] Batch 300: Loss = 0.5257
+[Epoch 13/20] Train Loss: 0.9131, Val Loss: 7.7211, Val MSE: 7.7102, Val MAE: 1.9406
+[Epoch 14/20] Batch 0: Loss = 0.6533
+[Epoch 14/20] Batch 25: Loss = 0.7392
+[Epoch 14/20] Batch 50: Loss = 2.6007
+[Epoch 14/20] Batch 75: Loss = 0.8308
+[Epoch 14/20] Batch 100: Loss = 1.2455
+[Epoch 14/20] Batch 125: Loss = 0.9612
+[Epoch 14/20] Batch 150: Loss = 1.0302
+[Epoch 14/20] Batch 175: Loss = 1.6972
+[Epoch 14/20] Batch 200: Loss = 2.1676
+[Epoch 14/20] Batch 225: Loss = 0.6494
+[Epoch 14/20] Batch 250: Loss = 0.5951
+[Epoch 14/20] Batch 275: Loss = 2.6923
+[Epoch 14/20] Batch 300: Loss = 0.7907
+[Epoch 14/20] Train Loss: 0.8507, Val Loss: 8.0906, Val MSE: 8.0784, Val MAE: 1.9656
+[Epoch 15/20] Batch 0: Loss = 0.3881
+[Epoch 15/20] Batch 25: Loss = 0.7808
+[Epoch 15/20] Batch 50: Loss = 2.2062
+[Epoch 15/20] Batch 75: Loss = 0.7041
+[Epoch 15/20] Batch 100: Loss = 1.5228
+[Epoch 15/20] Batch 125: Loss = 1.9658
+[Epoch 15/20] Batch 150: Loss = 0.8051
+[Epoch 15/20] Batch 175: Loss = 0.4296
+[Epoch 15/20] Batch 200: Loss = 2.5259
+[Epoch 15/20] Batch 225: Loss = 0.9047
+[Epoch 15/20] Batch 250: Loss = 0.2557
+[Epoch 15/20] Batch 275: Loss = 1.5477
+[Epoch 15/20] Batch 300: Loss = 0.4557
+[Epoch 15/20] Train Loss: 0.7998, Val Loss: 5.1661, Val MSE: 5.1619, Val MAE: 1.5674
+New best model found at epoch 15 with validation loss: 5.1661
+[Epoch 16/20] Batch 0: Loss = 0.6070
+[Epoch 16/20] Batch 25: Loss = 0.5741
+[Epoch 16/20] Batch 50: Loss = 1.8682
+[Epoch 16/20] Batch 75: Loss = 0.2409
+[Epoch 16/20] Batch 100: Loss = 2.3551
+[Epoch 16/20] Batch 125: Loss = 1.5073
+[Epoch 16/20] Batch 150: Loss = 0.3311
+[Epoch 16/20] Batch 175: Loss = 0.6047
+[Epoch 16/20] Batch 200: Loss = 3.8435
+[Epoch 16/20] Batch 225: Loss = 0.4749
+[Epoch 16/20] Batch 250: Loss = 0.8525
+[Epoch 16/20] Batch 275: Loss = 2.1221
+[Epoch 16/20] Batch 300: Loss = 0.6090
+[Epoch 16/20] Train Loss: 0.8103, Val Loss: 4.8308, Val MSE: 4.8255, Val MAE: 1.5029
+New best model found at epoch 16 with validation loss: 4.8308
+[Epoch 17/20] Batch 0: Loss = 0.7180
+[Epoch 17/20] Batch 25: Loss = 0.4980
+[Epoch 17/20] Batch 50: Loss = 1.0931
+[Epoch 17/20] Batch 75: Loss = 1.1321
+[Epoch 17/20] Batch 100: Loss = 0.7826
+[Epoch 17/20] Batch 125: Loss = 1.7604
+[Epoch 17/20] Batch 150: Loss = 0.5401
+[Epoch 17/20] Batch 175: Loss = 0.3571
+[Epoch 17/20] Batch 200: Loss = 2.3821
+[Epoch 17/20] Batch 225: Loss = 0.9399
+[Epoch 17/20] Batch 250: Loss = 0.6352
+[Epoch 17/20] Batch 275: Loss = 1.3517
+[Epoch 17/20] Batch 300: Loss = 0.3692
+[Epoch 17/20] Train Loss: 0.7306, Val Loss: 5.0501, Val MSE: 5.0357, Val MAE: 1.5131
+[Epoch 18/20] Batch 0: Loss = 0.5079
+[Epoch 18/20] Batch 25: Loss = 0.3610
+[Epoch 18/20] Batch 50: Loss = 2.8150
+[Epoch 18/20] Batch 75: Loss = 0.1449
+[Epoch 18/20] Batch 100: Loss = 0.8321
+[Epoch 18/20] Batch 125: Loss = 0.6768
+[Epoch 18/20] Batch 150: Loss = 1.7580
+[Epoch 18/20] Batch 175: Loss = 0.5257
+[Epoch 18/20] Batch 200: Loss = 1.8027
+[Epoch 18/20] Batch 225: Loss = 0.9110
+[Epoch 18/20] Batch 250: Loss = 0.5838
+[Epoch 18/20] Batch 275: Loss = 1.8874
+[Epoch 18/20] Batch 300: Loss = 0.5515
+[Epoch 18/20] Train Loss: 0.7296, Val Loss: 5.9474, Val MSE: 5.9359, Val MAE: 1.6395
+[Epoch 19/20] Batch 0: Loss = 0.3620
+[Epoch 19/20] Batch 25: Loss = 0.4555
+[Epoch 19/20] Batch 50: Loss = 1.4633
+[Epoch 19/20] Batch 75: Loss = 0.2382
+[Epoch 19/20] Batch 100: Loss = 0.7589
+[Epoch 19/20] Batch 125: Loss = 0.9081
+[Epoch 19/20] Batch 150: Loss = 1.4910
+[Epoch 19/20] Batch 175: Loss = 0.0780
+[Epoch 19/20] Batch 200: Loss = 1.5904
+[Epoch 19/20] Batch 225: Loss = 0.5323
+[Epoch 19/20] Batch 250: Loss = 0.9328
+[Epoch 19/20] Batch 275: Loss = 1.3508
+[Epoch 19/20] Batch 300: Loss = 0.3398
+[Epoch 19/20] Train Loss: 0.6407, Val Loss: 6.4662, Val MSE: 6.4565, Val MAE: 1.7363
+[Epoch 20/20] Batch 0: Loss = 0.4048
+[Epoch 20/20] Batch 25: Loss = 0.3629
+[Epoch 20/20] Batch 50: Loss = 1.7203
+[Epoch 20/20] Batch 75: Loss = 1.0495
+[Epoch 20/20] Batch 100: Loss = 0.3991
+[Epoch 20/20] Batch 125: Loss = 0.6633
+[Epoch 20/20] Batch 150: Loss = 2.1611
+[Epoch 20/20] Batch 175: Loss = 0.8033
+[Epoch 20/20] Batch 200: Loss = 1.0685
+[Epoch 20/20] Batch 225: Loss = 0.4677
+[Epoch 20/20] Batch 250: Loss = 0.4077
+[Epoch 20/20] Batch 275: Loss = 1.1725
+[Epoch 20/20] Batch 300: Loss = 0.7249
+[Epoch 20/20] Train Loss: 0.6215, Val Loss: 5.3571, Val MSE: 5.3533, Val MAE: 1.5819
+[2025-03-04 18:31:37,807] [INFO] [real_accelerator.py:222:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+Best model saved to models/bert_perplexity_predictor with validation loss: 4.8308

@@ -201,9 +201,10 @@ def get_evaluate_fn(train_cfg, model_cfg, dataset_cfg, save_every_round, total_r
             server_round == total_round or server_round % save_every_round == 0
         ):
             # Init model
-            main_model_params, _ = split_models(parameters)
+            # main_model_params, _ = split_models(parameters)
             model, tokenizer = get_model(model_cfg)
-            set_parameters(model, main_model_params)
+            # set_parameters(model, main_model_params)
+            set_parameters(model, parameters)
             
             tmp_dict = {
                 "prompter": prompter,

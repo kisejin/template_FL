@@ -3,7 +3,15 @@ from torch.utils.data import DataLoader
 import torch
 import copy
 import numpy as np
-from transformers import BertForSequenceClassification, GenerationConfig, AutoTokenizer
+from transformers import (
+    BertForSequenceClassification, 
+    GenerationConfig, 
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    AutoModelForCausalLM,
+    get_scheduler
+)
+from peft import prepare_model_for_kbit_training
 import inspect
 import logging
 import wandb
@@ -213,8 +221,10 @@ class ManualTrainer:
 
         print(f"Selection fraction: {self.selection_fraction}")
 
-        for epoch in tqdm(range(self.args.num_train_epochs),
-                  bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
+        for epoch in tqdm(
+            range(self.args.num_train_epochs),
+            total=self.args.num_train_epochs,
+            bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
             self.model.train()
             epoch_loss = 0.0
 
@@ -235,7 +245,7 @@ class ManualTrainer:
                 if step >= self.args.max_steps and self.args.max_steps > 0:
                     break
 
-                self.optimizer.zero_grad()
+                
 
                 outputs = self.model(
                     input_ids=batch['input_ids'],
@@ -246,6 +256,7 @@ class ManualTrainer:
 
                 self.accelerator.backward(loss)
                 self.optimizer.step()
+                self.optimizer.zero_grad()
 
                 epoch_loss += loss.item()
 
@@ -297,6 +308,8 @@ class ManualTrainer:
         # Configure quantization based on specified bit precision
         quantization_bit = getattr(self.mates_args, "quantization_bit", 8)  # Default to 8-bit for training
         
+        ref_epochs = self.args.num_train_epochs
+        
         # For training, we should use 8-bit as 4-bit typically doesn't support training
         if quantization_bit != 8 and self.accelerator.is_main_process:
             print(f"Warning: {quantization_bit}-bit quantization may not support training.")
@@ -312,6 +325,7 @@ class ManualTrainer:
             quantization_config = BitsAndBytesConfig(
                 load_in_8bit=True,
                 bnb_8bit_use_double_quant=True,
+                bnb_8bit_quant_type="nf4",
                 bnb_8bit_enable_fp32_cpu_offload=True  # Enable FP32 offload for stability during training
             )
             
@@ -359,25 +373,58 @@ class ManualTrainer:
             )
             print("Using standard optimizer")
         
+        
+        gradient_accumulation_steps = 1
+        num_update_steps_per_epoch = len(self.reference_loader) // gradient_accumulation_steps
+        num_training_steps = ref_epochs * num_update_steps_per_epoch
+        lr_scheduler = get_scheduler(
+            name="cosine",
+            optimizer=ref_optimizer,
+            num_warmup_steps=int(0.1 * num_training_steps),
+            num_training_steps=num_training_steps,
+        )
+        
         # Prepare reference model and optimizer with accelerator
-        self.reference_model, ref_optimizer = self.accelerator.prepare(
-            self.reference_model, ref_optimizer
+        self.reference_model = prepare_model_for_kbit_training(self.reference_model)
+        self.reference_model, ref_optimizer, lr_scheduler, self.reference_loader, self.train_loader = self.accelerator.prepare(
+            self.reference_model, ref_optimizer, lr_scheduler, self.reference_loader, self.train_loader
         )
         
         # Train the quantized model
-        ref_epochs = self.args.num_train_epochs
+
         self.reference_model.train()
         
-        for epoch in range(ref_epochs):
+        print("Training reference model...")
+        for epoch in tqdm(
+            range(ref_epochs), 
+            total=ref_epochs,
+            desc="Reference EPOCH",
+            bar_format='{l_bar}{bar} |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]',
+            colour="YELLOW"
+        ):
             total_loss = 0.0
-            for batch in self.reference_loader:
-                ref_optimizer.zero_grad()
+            
+            pbar = tqdm(
+                self.reference_loader,
+                total=len(self.reference_loader),
+                desc="Reference BATCH",
+                bar_format='{l_bar}{bar} |{n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}/{postfix}]',
+                colour="GREEN",
+                unit=" samples",
+            )
+            
+            for batch in pbar:
+                
+                batch = {k: v.to("cuda") for k, v in batch.items()}
+                
                 outputs = self.reference_model(**batch)
                 loss = outputs.loss
                 
                 # Use accelerator for backward pass
                 self.accelerator.backward(loss)
                 ref_optimizer.step()
+                lr_scheduler.step()
+                ref_optimizer.zero_grad()
                 
                 total_loss += loss.item()
             
@@ -403,18 +450,45 @@ class ManualTrainer:
         batch_perplexities = []
         
         with torch.no_grad():
-            for idx, batch in enumerate(self.train_loader):
-                outputs = self.reference_model(**batch)
-                loss = outputs.loss.item()
+            pbar = tqdm(
+                self.train_loader,
+                total=len(self.train_loader),
+                desc="Computing Perplexity",
+                bar_format='{l_bar}{bar} |{n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}/{postfix}]',
+                colour="BLUE",
+                unit=" samples",
+            )
+            for idx, batch in enumerate(pbar):
+                batch = {k: v.to("cuda") for k, v in batch.items()}
                 
-                # Calculate perplexity
-                perplexity = 2 ** loss
-                perplexity_dict[idx] = perplexity
+
+                outputs = self.reference_model(**batch)
+                
+                logits = outputs.logits
+                labels = batch['labels']
+                bs, seq_len, vocab_size = logits.shape
+                
+                loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), labels.view(-1), ignore_index=-100, reduction='none')
+                
+                flat_loss = loss.reshape(bs, -1)
+                
+                # Create mask for padding
+                mask = (labels != -100).float()
+                
+                # Apply mask to loss
+                loss_per_sample = (flat_loss * mask).sum(dim=1) / seq_len
+                
+                perplexity = torch.exp2(loss_per_sample)
+                
+                batch_perplexities.extend(perplexity.tolist())
+                
+                # perplexity_dict[idx] = perplexity
                 
                 if idx % 100 == 0:
                     print(f"Processed {idx}/{len(self.train_loader)} batches")
         
         # Sort samples by perplexity score
+        perplexity_dict = {idx: perplexity for idx, perplexity in enumerate(batch_perplexities)}
         sorted_indices = sorted(perplexity_dict.keys(), key=lambda x: perplexity_dict[x])
         
         # Select indices based on criteria

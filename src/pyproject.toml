@@ -60,7 +60,7 @@ model.lora.lora-dropout = 0.05
 model.lora.lora-target-modules = "q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj"
 
 # Define training settings
-train.save-every-round = 5 
+train.save-every-round = 1 
 train.learning-rate-max = 5e-5
 train.learning-rate-min = 1e-6
 train.seq-length = 256
@@ -95,7 +95,7 @@ train.training-arguments.load_best_model_at_end = true
 train.training-arguments.report-to = "wandb"
 
 # Define local training settings 
-train.strategy.fraction-fit = 1.0
+train.strategy.fraction-fit = 0.2
 train.strategy.fraction-evaluate = 0.0
 train.strategy.min-available-clients = 2 # 6 for full fine tuning
 
@@ -104,5 +104,5 @@ default = "local-simulation"
 
 [tool.flwr.federations.local-simulation]
 options.num-supernodes = 10
-options.backend.client-resources.num-cpus = 24
-options.backend.client-resources.num-gpus = 2.0
+options.backend.client-resources.num-cpus = 8
+options.backend.client-resources.num-gpus = 1.0

@@ -4,6 +4,7 @@ import os
 import torch
 import wandb
 import numpy as np
+import random
 from dotenv import load_dotenv
 from datetime import datetime
 from tqdm import tqdm
@@ -23,7 +24,7 @@ from .dataset import replace_keys
 from .myfedavg import FedAvg
 from .data_domains import global_test_set_hete
 from .make_data import Prompter, generate_and_tokenize_prompt
-from .metrics import exact_match, f1, get_rouge_score
+from .metrics import f1, get_rouge_score
 from .utils import save_server_metrics
 
 from datasets import load_dataset, Dataset
@@ -42,6 +43,13 @@ os.environ["WANDB_MODE"] = "disabled"
 # Global variable
 client_domain_score = {}
 server_score = {}
+DEFAULT_RANDOM_SEED = 42
+
+def set_seed(seed=DEFAULT_RANDOM_SEED):
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.manual_seed(seed)
+
 
 class LLMSampleCB(WandbCallback):
     def __init__(self, trainer, test_dataset, task, num_samples=10, max_new_tokens=256, log_model="checkpoint"):
@@ -307,12 +315,24 @@ def server_fn(context: Context):
         evaluate_fn=get_evaluate_fn(
             cfg.train, cfg.model, cfg.dataset, cfg.train.save_every_round, num_rounds, num_nodes, save_path, cfg.mates
         ),
-        use_mates=cfg.mates.state
+        use_mates=cfg.mates.state,
     )
     config = ServerConfig(num_rounds=num_rounds)
 
     return ServerAppComponents(strategy=strategy, config=config)
 
+import sentry_sdk
+
+sentry_sdk.init(
+    dsn=os.getenv("SENTRY_DSN"),
+    # Add data like request headers and IP for users,
+    # see https://docs.sentry.io/platforms/python/data-management/data-collected/ for more info
+    send_default_pii=True,
+    # Set traces_sample_rate to 1.0 to capture 100%
+    # of transactions for tracing.
+    traces_sample_rate=1.0,
+)
 
 # Flower ServerApp
+sentry_sdk.profiler.start_profiler()
 app = ServerApp(server_fn=server_fn)

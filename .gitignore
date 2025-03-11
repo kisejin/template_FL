@@ -173,3 +173,6 @@ cython_debug/
 # Remove uncenssary output files  
 results/
 wandb/
+logs/
+result_metric/
+

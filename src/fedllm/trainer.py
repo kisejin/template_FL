@@ -103,7 +103,8 @@ class ManualLLMSampleCB:
 class ManualTrainer:
     def __init__(
         self, model, tokenizer, train_dataset, val_dataset, reference_dataset,
-        args, data_collator, compute_metrics, mates_args, selection_fraction
+        args, data_collator, compute_metrics, mates_args, selection_fraction,
+        **kwargs
     ):
         self.accelerator = Accelerator()
         self.model = model
@@ -113,7 +114,7 @@ class ManualTrainer:
         self.compute_metrics = compute_metrics
         self.mates_args = mates_args
         self.selection_fraction = selection_fraction
-
+        
         # Remove unused columns from datasets
         if train_dataset:
             self.train_dataset = self._remove_unused_columns(train_dataset, "training")     
@@ -221,10 +222,20 @@ class ManualTrainer:
 
         print(f"Selection fraction: {self.selection_fraction}")
 
+        num_training_steps = self.args.num_train_epochs * len(self.train_loader)
+        lr_scheduler = get_scheduler(
+            name="cosine",
+            optimizer=self.optimizer,
+            num_warmup_steps=int(0.1 * num_training_steps),
+            num_training_steps=num_training_steps,
+        )
+
         for epoch in tqdm(
             range(self.args.num_train_epochs),
             total=self.args.num_train_epochs,
-            bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
+            desc="Epoch",
+            bar_format='{l_bar}{bar} |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]',
+            colour="YELLOW"):
             self.model.train()
             epoch_loss = 0.0
 
@@ -238,10 +249,14 @@ class ManualTrainer:
                 # # Exclude the first (0) and last (len(train_loader)-1) indices:
                 # update_steps = set(full_update_indices[1:-1])
 
-                self.prune_dataset_by_perplexity()
+                self.prune_dataset_by_perplexity(selection_criteria=self.mates_args.selection_criteria)
             
             for step, batch in tqdm(enumerate(self.train_loader),
-                                    bar_format='{l_bar}{bar} {percentage:3.0f}% |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]'):
+                                    total=len(self.train_loader),
+                                    desc="Training",
+                                    bar_format='{l_bar}{bar} |{n_fmt}/{total_fmt} [{elapsed}<{remaining}]',
+                                    colour="BLUE",
+                                    unit=" samples"):
                 if step >= self.args.max_steps and self.args.max_steps > 0:
                     break
 
@@ -256,6 +271,7 @@ class ManualTrainer:
 
                 self.accelerator.backward(loss)
                 self.optimizer.step()
+                lr_scheduler.step()
                 self.optimizer.zero_grad()
 
                 epoch_loss += loss.item()
@@ -311,23 +327,72 @@ class ManualTrainer:
         ref_epochs = self.args.num_train_epochs
         
         # For training, we should use 8-bit as 4-bit typically doesn't support training
-        if quantization_bit != 8 and self.accelerator.is_main_process:
-            print(f"Warning: {quantization_bit}-bit quantization may not support training.")
-            print("Switching to 8-bit quantization which better supports training.")
-            quantization_bit = 8
-        
-        print(f"Applying {quantization_bit}-bit quantization before training...")
-        
-        try:
-            from transformers import BitsAndBytesConfig, AutoModelForCausalLM
+        if quantization_bit != -1:
+            if quantization_bit != 8 and self.accelerator.is_main_process:
+                print(f"Warning: {quantization_bit}-bit quantization may not support training.")
+                print("Switching to 8-bit quantization which better supports training.")
+                quantization_bit = 8
             
-            # Create quantization config
-            quantization_config = BitsAndBytesConfig(
-                load_in_8bit=True,
-                bnb_8bit_use_double_quant=True,
-                bnb_8bit_quant_type="nf4",
-                bnb_8bit_enable_fp32_cpu_offload=True  # Enable FP32 offload for stability during training
-            )
+            print(f"Applying {quantization_bit}-bit quantization before training...")
+            
+            try:
+                from transformers import BitsAndBytesConfig
+                
+                # Create quantization config
+                quantization_config = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                    bnb_8bit_use_double_quant=True,
+                    bnb_8bit_quant_type="nf4",
+                    bnb_8bit_enable_fp32_cpu_offload=True  # Enable FP32 offload for stability during training
+                )
+                
+                # Get model config
+                model_config = model_to_quantize.config
+                
+                # Save model path if available
+                model_path = getattr(model_to_quantize, "name_or_path", None)
+                
+                # If no path available, save to temp directory
+                if not model_path:
+                    import os, tempfile
+                    temp_dir = tempfile.mkdtemp()
+                    model_to_quantize.save_pretrained(temp_dir)
+                    model_path = temp_dir
+                
+                # Reload with quantization
+                self.reference_model = AutoModelForCausalLM.from_pretrained(
+                    model_path,
+                    config=model_config,
+                    quantization_config=quantization_config,
+                    device_map="auto"
+                )
+                
+                print(f"Successfully quantized reference model to {quantization_bit}-bit")
+                
+            except Exception as e:
+                print(f"Quantization failed: {e}")
+                print("Falling back to full precision model")
+                self.reference_model = model_to_quantize
+            
+            # Prepare optimizer for reference model
+            # Use optimizer with 8-bit Adam which is compatible with quantized models
+            try:
+                import bitsandbytes as bnb
+                ref_optimizer = bnb.optim.AdamW8bit(
+                    self.reference_model.parameters(),
+                    lr=self.args.learning_rate
+                )
+                print("Using 8-bit optimizer for quantized model")
+            except:
+                ref_optimizer = torch.optim.AdamW(
+                    self.reference_model.parameters(),
+                    lr=self.args.learning_rate
+                )
+                print("Using standard optimizer")
+        
+        else:
+            
+            from bitsandbytes.optim import Lion
             
             # Get model config
             model_config = model_to_quantize.config
@@ -346,34 +411,17 @@ class ManualTrainer:
             self.reference_model = AutoModelForCausalLM.from_pretrained(
                 model_path,
                 config=model_config,
-                quantization_config=quantization_config,
                 device_map="auto"
             )
+
+            print(f"Successfully loaded reference model")
             
-            print(f"Successfully quantized reference model to {quantization_bit}-bit")
-            
-        except Exception as e:
-            print(f"Quantization failed: {e}")
-            print("Falling back to full precision model")
-            self.reference_model = model_to_quantize
-        
-        # Prepare optimizer for reference model
-        # Use optimizer with 8-bit Adam which is compatible with quantized models
-        try:
-            import bitsandbytes as bnb
-            ref_optimizer = bnb.optim.AdamW8bit(
+            ref_optimizer = Lion(
                 self.reference_model.parameters(),
-                lr=self.args.learning_rate
+                lr=self.mates_args.learning_rate,
+                weight_decay=self.mates_args.weight_decay
             )
-            print("Using 8-bit optimizer for quantized model")
-        except:
-            ref_optimizer = torch.optim.AdamW(
-                self.reference_model.parameters(),
-                lr=self.args.learning_rate
-            )
-            print("Using standard optimizer")
-        
-        
+    
         gradient_accumulation_steps = 1
         num_update_steps_per_epoch = len(self.reference_loader) // gradient_accumulation_steps
         num_training_steps = ref_epochs * num_update_steps_per_epoch
@@ -385,16 +433,20 @@ class ManualTrainer:
         )
         
         # Prepare reference model and optimizer with accelerator
-        self.reference_model = prepare_model_for_kbit_training(self.reference_model)
+        if self.mates_args.quantization_bit in [4, 8]:
+            self.reference_model = prepare_model_for_kbit_training(self.reference_model)
         self.reference_model, ref_optimizer, lr_scheduler, self.reference_loader, self.train_loader = self.accelerator.prepare(
             self.reference_model, ref_optimizer, lr_scheduler, self.reference_loader, self.train_loader
         )
         
         # Train the quantized model
-
-        self.reference_model.train()
         
         print("Training reference model...")
+        
+        # Start time
+        start_time = time.time()
+        self.reference_model.train()
+        
         for epoch in tqdm(
             range(ref_epochs), 
             total=ref_epochs,
@@ -431,8 +483,13 @@ class ManualTrainer:
             avg_loss = total_loss / len(self.reference_loader)
             print(f"Reference model - Epoch {epoch+1}/{ref_epochs}, Loss: {avg_loss:.4f}")
         
+        # End time
+        end_time = time.time()
+        runtime = end_time - start_time
+        print(f"Reference model training completed in {runtime:.2f} seconds")
+        
         self.reference_model.eval()
-        print("Reference model training completed.")
+
 
 
     def prune_dataset_by_perplexity(self, selection_criteria="high"):
@@ -448,6 +505,9 @@ class ManualTrainer:
         # Compute perplexity for each sample with optimized batch processing
         batch_indices = []
         batch_perplexities = []
+        
+        # Start time
+        start_time = time.time()
         
         with torch.no_grad():
             pbar = tqdm(
@@ -503,7 +563,7 @@ class ManualTrainer:
             end_idx = start_idx + num_samples_to_keep
             selected_indices = sorted_indices[start_idx:end_idx]
         elif selection_criteria == "high":
-            selected_indices = sorted_indices[-num_samples_to_keep:]
+            selected_indices = sorted_indices[-(total_samples - num_samples_to_keep):]
         else:
             raise ValueError(f"Unknown selection criteria: {selection_criteria}")
         
@@ -524,6 +584,11 @@ class ManualTrainer:
         self.train_dataset = pruned_dataset
 
         torch.cuda.empty_cache()
+        
+        # End time
+        end_time = time.time()
+        runtime = end_time - start_time
+        print(f"Dataset pruning completed in {runtime:.2f} seconds")
         
         print(f"Dataset pruned: {len(pruned_dataset)}/{total_samples} samples kept ({selection_criteria} selection)")
         

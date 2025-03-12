@@ -52,7 +52,7 @@ mates.quantization_bit = -1
 mates.reference-ratio = 0.2
 mates.reference-batch-size = 4
 mates.tokens_per_param = 20
-mates.selection_criteria = "high"
+mates.selection_criteria = "medium"
 mates.learning_rate = 2e-4
 mates.weight_decay = 2e-4
 

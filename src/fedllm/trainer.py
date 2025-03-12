@@ -223,12 +223,12 @@ class ManualTrainer:
         print(f"Selection fraction: {self.selection_fraction}")
 
         num_training_steps = self.args.num_train_epochs * len(self.train_loader)
-        lr_scheduler = get_scheduler(
-            name="cosine",
-            optimizer=self.optimizer,
-            num_warmup_steps=int(0.1 * num_training_steps),
-            num_training_steps=num_training_steps,
-        )
+        # lr_scheduler = get_scheduler(
+        #     name="cosine",
+        #     optimizer=self.optimizer,
+        #     num_warmup_steps=int(0.1 * num_training_steps),
+        #     num_training_steps=num_training_steps,
+        # )
 
         for epoch in tqdm(
             range(self.args.num_train_epochs),
@@ -271,7 +271,7 @@ class ManualTrainer:
 
                 self.accelerator.backward(loss)
                 self.optimizer.step()
-                lr_scheduler.step()
+                # lr_scheduler.step()
                 self.optimizer.zero_grad()
 
                 epoch_loss += loss.item()
@@ -416,27 +416,32 @@ class ManualTrainer:
 
             print(f"Successfully loaded reference model")
             
-            ref_optimizer = Lion(
-                self.reference_model.parameters(),
-                lr=self.mates_args.learning_rate,
-                weight_decay=self.mates_args.weight_decay
+            # ref_optimizer = Lion(
+            #     self.reference_model.parameters(),
+            #     lr=self.mates_args.learning_rate,
+            #     weight_decay=self.mates_args.weight_decay
+            # )
+
+            ref_optimizer = torch.optim.AdamW(
+                    self.reference_model.parameters(),
+                    lr=self.args.learning_rate
             )
     
         gradient_accumulation_steps = 1
         num_update_steps_per_epoch = len(self.reference_loader) // gradient_accumulation_steps
         num_training_steps = ref_epochs * num_update_steps_per_epoch
-        lr_scheduler = get_scheduler(
-            name="cosine",
-            optimizer=ref_optimizer,
-            num_warmup_steps=int(0.1 * num_training_steps),
-            num_training_steps=num_training_steps,
-        )
+        # lr_scheduler = get_scheduler(
+        #     name="cosine",
+        #     optimizer=ref_optimizer,
+        #     num_warmup_steps=int(0.1 * num_training_steps),
+        #     num_training_steps=num_training_steps,
+        # )
         
         # Prepare reference model and optimizer with accelerator
         if self.mates_args.quantization_bit in [4, 8]:
             self.reference_model = prepare_model_for_kbit_training(self.reference_model)
-        self.reference_model, ref_optimizer, lr_scheduler, self.reference_loader, self.train_loader = self.accelerator.prepare(
-            self.reference_model, ref_optimizer, lr_scheduler, self.reference_loader, self.train_loader
+        self.reference_model, ref_optimizer, self.reference_loader, self.train_loader = self.accelerator.prepare(
+            self.reference_model, ref_optimizer, self.reference_loader, self.train_loader
         )
         
         # Train the quantized model
@@ -475,7 +480,7 @@ class ManualTrainer:
                 # Use accelerator for backward pass
                 self.accelerator.backward(loss)
                 ref_optimizer.step()
-                lr_scheduler.step()
+                # lr_scheduler.step()
                 ref_optimizer.zero_grad()
                 
                 total_loss += loss.item()

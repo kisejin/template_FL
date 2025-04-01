@@ -33,7 +33,7 @@ serverapp = "fedllm.server_app:app"
 clientapp = "fedllm.client_app:app"
 
 [tool.flwr.app.config]
-num-server-rounds = 10
+num-server-rounds = 1
 num-supernodes = 10
 
 # Define dataset
@@ -48,7 +48,7 @@ model.flash_attention = false
 
 # Use MATES
 mates.state = true
-mates.quantization_bit = -1
+mates.quantization_bit = 8
 mates.reference-ratio = 0.2
 mates.reference-batch-size = 4
 mates.tokens_per_param = 20
@@ -98,9 +98,10 @@ train.training-arguments.load_best_model_at_end = true
 train.training-arguments.report-to = "wandb"
 
 # Define local training settings 
-train.strategy.fraction-fit = 0.6
+train.strategy.name = "fedavg" # type = ['fedavg', 'fedavgm']
+train.strategy.fraction-fit = 1.0
 train.strategy.fraction-evaluate = 0.0
-train.strategy.min-available-clients = 6 # 6 for full fine tuning
+train.strategy.min-available-clients = 1 # 6 for full fine tuning
 
 [tool.flwr.federations]
 default = "local-simulation"

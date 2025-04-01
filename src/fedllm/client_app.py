@@ -257,6 +257,7 @@ class FlowerClient(NumPyClient):
             compute_metrics=self.compute_metrics, 
             mates_args=self.mates_args,
             selection_fraction=selection_fraction,
+            client_id=self.id,
         )
 
         # Train the model

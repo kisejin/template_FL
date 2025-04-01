@@ -175,4 +175,6 @@ results/
 wandb/
 logs/
 result_metric/
+.vscode/
+testing/
 

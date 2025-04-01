@@ -27,7 +27,7 @@ sed -i "s/^\(mates\.state\s*=\s*\).*/\1$state/" pyproject.toml
 sed -i "s#\(folder=\"result_metric/\)[^\"]*\(\")\)#\1${datetime}\2#g" fedllm/utils.py
 
 # Run the command and save output and error logs for the first run
-CUDA_VISIBLE_DEVICES=0 flwr run . > logs/$datetime/output.log 2> logs/$datetime/error.log
+CUDA_VISIBLE_DEVICES=1 flwr run . > logs/$datetime/output.log 2> logs/$datetime/error.log
 
 
 # Record end time

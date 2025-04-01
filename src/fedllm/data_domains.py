@@ -123,7 +123,11 @@ class FinanceDataset(DatasetAbstract):
 class MathDataset(DatasetAbstract):
     
     def __init__(self):
-        list_dataset = ["TIGER-Lab/MathInstruct", "xDAN2099/lighteval-MATH", "gsm8k"]
+        list_dataset = [
+            "TIGER-Lab/MathInstruct", 
+            # "xDAN2099/lighteval-MATH", 
+            # "gsm8k"
+        ]
         super().__init__(list_dataset, 'math')
         self._processing_data()
         

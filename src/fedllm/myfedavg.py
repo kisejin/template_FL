@@ -116,8 +116,7 @@ class FedAvg(Strategy):
         evaluate_metrics_aggregation_fn: Optional[MetricsAggregationFn] = None,
         inplace: bool = True,
         use_mates: bool = False,
-        update_rounds: int = 3,
-        num_rounds: int = 10,
+
     ) -> None:
         super().__init__()
 

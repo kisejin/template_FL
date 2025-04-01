@@ -1,6 +1,7 @@
 """flowertune-llm: A Flower / FlowerTune app."""
 
 import os
+from grpc import server
 import torch
 import wandb
 import numpy as np
@@ -29,7 +30,7 @@ from .utils import save_server_metrics
 
 from datasets import load_dataset, Dataset
 from sklearn.model_selection import train_test_split
-
+from flwr.server.strategy import FedAvgM, FedAdam
 
 load_dotenv(".env")
 
@@ -305,18 +306,36 @@ def server_fn(context: Context):
     init_model_parameters = ndarrays_to_parameters(init_model_parameters)
 
     # Define strategy
-    strategy = FedAvg(
-        fraction_fit=cfg.train.strategy.fraction_fit,
-        fraction_evaluate=cfg.train.strategy.fraction_evaluate,
-        min_available_clients=cfg.train.strategy.min_available_clients,
-        on_fit_config_fn=get_on_fit_config(save_path),
-        fit_metrics_aggregation_fn=fit_weighted_average,
-        initial_parameters=init_model_parameters,
-        evaluate_fn=get_evaluate_fn(
-            cfg.train, cfg.model, cfg.dataset, cfg.train.save_every_round, num_rounds, num_nodes, save_path, cfg.mates
-        ),
-        use_mates=cfg.mates.state,
-    )
+    if cfg.train.strategy.name == 'fedavg':
+        strategy = FedAvg(
+            fraction_fit=cfg.train.strategy.fraction_fit,
+            fraction_evaluate=cfg.train.strategy.fraction_evaluate,
+            min_available_clients=cfg.train.strategy.min_available_clients,
+            on_fit_config_fn=get_on_fit_config(save_path),
+            fit_metrics_aggregation_fn=fit_weighted_average,
+            initial_parameters=init_model_parameters,
+            evaluate_fn=get_evaluate_fn(
+                cfg.train, cfg.model, cfg.dataset, cfg.train.save_every_round, num_rounds, num_nodes, save_path, cfg.mates
+            ),
+            use_mates=cfg.mates.state,
+        )
+    
+    elif cfg.train.strategy.name == 'fedavgm':
+        strategy = FedAvgM(
+            fraction_fit=cfg.train.strategy.fraction_fit,
+            fraction_evaluate=cfg.train.strategy.fraction_evaluate,
+            min_available_clients=cfg.train.strategy.min_available_clients,
+            on_fit_config_fn=get_on_fit_config(save_path),
+            fit_metrics_aggregation_fn=fit_weighted_average,
+            initial_parameters=init_model_parameters,
+            evaluate_fn=get_evaluate_fn(
+                cfg.train, cfg.model, cfg.dataset, cfg.train.save_every_round, num_rounds, num_nodes, save_path, cfg.mates
+            ),
+            server_learning_rate=1.0,
+            server_momentum=0.5,
+
+        )
+    
     config = ServerConfig(num_rounds=num_rounds)
 
     return ServerAppComponents(strategy=strategy, config=config)

@@ -18,8 +18,26 @@ import wandb
 from tqdm import tqdm
 import time
 import torch.nn.functional as F
+import json
+import re
 
 logger = logging.getLogger(__name__)
+
+
+def add_space_around_special_chars(text):
+  """
+  Inserts a space before and after each special character in the text.
+  Special characters are defined as anything not alphanumeric or whitespace.
+  """
+  # Find any character that is not a word character (\w) or whitespace (\s)
+  # and replace it with ' space + character + space '
+  processed_text = re.sub(r'([^\w\s])', r' \1 ', text)
+
+  # Optional: Replace multiple consecutive spaces with a single space
+  # and remove leading/trailing whitespace
+  processed_text = re.sub(r'\s+', ' ', processed_text).strip()
+
+  return processed_text
 
 # Wrapper to add dropout to the model's outputs (e.g. logits)
 class ModelWithDropoutWrapper(torch.nn.Module):
@@ -114,6 +132,7 @@ class ManualTrainer:
         self.compute_metrics = compute_metrics
         self.mates_args = mates_args
         self.selection_fraction = selection_fraction
+        self.kwargs = kwargs
         
         # Remove unused columns from datasets
         if train_dataset:
@@ -124,7 +143,9 @@ class ManualTrainer:
                 batch_size=self.args.per_device_train_batch_size,
                 shuffle=True,
                 collate_fn=self.data_collator,
-                drop_last=self.args.dataloader_drop_last
+                drop_last=self.args.dataloader_drop_last,
+                num_workers=8,
+                pin_memory=True
             )
         else:
             self.train_loader = None
@@ -136,7 +157,9 @@ class ManualTrainer:
                 batch_size=self.args.per_device_eval_batch_size,
                 shuffle=False,
                 collate_fn=self.data_collator,
-                drop_last=self.args.dataloader_drop_last
+                drop_last=self.args.dataloader_drop_last,
+                num_workers=8,
+                pin_memory=True
             )
         else:
             self.val_loader = None
@@ -149,7 +172,9 @@ class ManualTrainer:
                 batch_size=self.mates_args.reference_batch_size,
                 shuffle=False,
                 collate_fn=self.data_collator,
-                drop_last=self.args.dataloader_drop_last
+                drop_last=self.args.dataloader_drop_last,
+                num_workers=8,
+                pin_memory=True
             )
 
             # Prepare holdout and reference loaders for Accelerator
@@ -513,6 +538,17 @@ class ManualTrainer:
         
         # Start time
         start_time = time.time()
+
+        # Get length token distribution of train dataset
+        temp = self.tokenizer.batch_decode(self.train_loader.dataset['input_ids'], return_tensors='pt', skip_special_tokens=True)
+        
+        lengths_prev = []
+        
+        for item in temp:
+            token = self.tokenizer(item, return_tensors='pt')['input_ids'][0]
+            lengths_prev.append(len(token))
+        
+            
         
         with torch.no_grad():
             pbar = tqdm(
@@ -572,8 +608,36 @@ class ManualTrainer:
         else:
             raise ValueError(f"Unknown selection criteria: {selection_criteria}")
         
+        
+        client_id = -1
+        if "client_id" in self.kwargs.keys():
+            client_id = self.kwargs["client_id"]
+        
         # Create pruned dataset
         pruned_dataset = self.train_dataset.select(selected_indices)
+        
+        temp = self.tokenizer.batch_decode(
+            pruned_dataset['input_ids'],
+            skip_special_tokens=True,
+            return_tensors='pt'
+        )
+        
+        length_after = []
+        
+        for item in temp:
+            token = self.tokenizer(item, return_tensors='pt')['input_ids'][0]
+            length_after.append(
+                len(token)
+            )
+        
+        dict_lenght = {
+            'before_pruned': lengths_prev,
+            'after_pruned': length_after,
+            'selection_fraction': self.selection_fraction,
+        }
+        
+        with open(f'result_metric/lengths_client_{client_id}.json', 'w') as f:
+            json.dump(dict_lenght, f)
         
         # Create new train loader with pruned dataset
         new_train_loader = DataLoader(
@@ -581,7 +645,9 @@ class ManualTrainer:
             batch_size=self.args.per_device_train_batch_size,
             shuffle=True,
             collate_fn=self.data_collator,
-            drop_last=self.args.dataloader_drop_last
+            drop_last=self.args.dataloader_drop_last,
+            num_workers=8,
+            pin_memory=True
         )
         
         # Prepare the new loader with accelerator
